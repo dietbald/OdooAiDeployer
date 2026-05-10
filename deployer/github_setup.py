@@ -33,10 +33,11 @@ def create_environment(owner: str, name: str, env_name: str) -> None:
     Note: setting required_reviewers needs the user/team id which `gh api`
     can resolve. For simplicity v1 prints manual instructions for reviewers.
     """
+    # -F sends typed values (integer here); -f would send a string and fail.
     gh_run([
         "api", "--method", "PUT",
         f"repos/{owner}/{name}/environments/{env_name}",
-        "-f", "wait_timer=0",
+        "-F", "wait_timer=0",
     ])
 
 

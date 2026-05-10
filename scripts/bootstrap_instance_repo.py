@@ -65,9 +65,10 @@ def copy_template(dest: Path, mapping: dict[str, str]) -> None:
 def create_environments(owner: str, repo: str) -> None:
     for env in ("dev", "staging", "production"):
         try:
+            # -F sends typed values (integer here); -f would send a string and fail.
             run(["gh", "api", "--method", "PUT",
                  f"repos/{owner}/{repo}/environments/{env}",
-                 "-f", "wait_timer=0"])
+                 "-F", "wait_timer=0"])
             print(f"  ✓ environment '{env}' created")
         except subprocess.CalledProcessError as exc:
             print(f"  ✗ failed to create env '{env}': {exc}")
