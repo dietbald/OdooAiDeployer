@@ -1,0 +1,72 @@
+name: promote-prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      changeset:
+        description: "Changeset id to promote to production"
+        required: true
+
+jobs:
+  promote-prod:
+    runs-on: ubuntu-latest
+    environment: production  # Required reviewer enforced by GitHub env protection
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install OdooAiDeployer
+        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
+
+      - name: Verify dev + staging audits exist with matching sha
+        run: |
+          set -e
+          cs="${{ github.event.inputs.changeset }}"
+          for env in dev staging; do
+            if [ ! -f "audits/$env/$cs.json" ]; then
+              echo "::error::Missing audits/$env/$cs.json — must promote through $env first."
+              exit 1
+            fi
+          done
+          # Status command surfaces sha mismatches across envs
+          odoo-deploy --repo . status --changeset "$cs"
+
+      - name: Deploy to production
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
+          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+        run: |
+          odoo-deploy --repo . deploy --env production \
+            --changeset "${{ github.event.inputs.changeset }}" --no-commit
+
+      - name: Verify post-deploy
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
+          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+        run: |
+          odoo-deploy --repo . verify --env production \
+            --changeset "${{ github.event.inputs.changeset }}"
+
+      - name: Commit audit + rollback snapshot
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add audits/production/ rollback_snapshots/production/ || true
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "deploy: production/${{ github.event.inputs.changeset }}"
+            git push origin HEAD:main
+          fi

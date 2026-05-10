@@ -1,0 +1,63 @@
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment to roll back (dev, staging, production)"
+        required: true
+        type: choice
+        options: [dev, staging, production]
+      changeset:
+        description: "Changeset id to roll back"
+        required: true
+      dry_run:
+        description: "Preview only (don't write to Odoo)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.env }}  # uses env protection — staging/production require approval
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install OdooAiDeployer
+        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
+
+      - name: Roll back
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
+          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+        run: |
+          set -e
+          DRY=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
+          odoo-deploy --repo . rollback --env "${{ github.event.inputs.env }}" \
+            --changeset "${{ github.event.inputs.changeset }}" $DRY
+
+      - name: Commit rollback audit
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add audits/ || true
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "rollback: ${{ github.event.inputs.env }}/${{ github.event.inputs.changeset }}"
+            git push origin HEAD:main
+          fi

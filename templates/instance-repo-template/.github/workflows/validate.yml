@@ -1,0 +1,87 @@
+name: validate
+
+on:
+  push:
+    branches:
+      - 'ai/**'
+      - 'dev/**'
+      - 'hotfix/**'
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install OdooAiDeployer
+        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
+
+      - name: Detect changed changesets
+        id: detect
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+            git fetch origin "${{ github.base_ref }}"
+            changed=$(git diff --name-only "$base...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+          else
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              changed=$(ls -1 changesets 2>/dev/null || true)
+            else
+              changed=$(git diff --name-only "$before...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+            fi
+          fi
+          echo "changesets<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$changed" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          if [ -z "$changed" ]; then
+            echo "No changesets touched in this push/PR."
+          else
+            echo "Will validate:"; echo "$changed"
+          fi
+
+      - name: Restricted-folder guard (ai/* branches)
+        if: startsWith(github.ref, 'refs/heads/ai/')
+        run: |
+          set -e
+          changed_files=$(git diff --name-only "origin/main...HEAD" 2>/dev/null || git diff --name-only HEAD~1...HEAD)
+          forbidden_pattern='^(deployer/|\.github/workflows/|config/(?!blocklist/)|audits/(staging|production)/|rollback_snapshots/(staging|production)/|baseline/prod/)'
+          violations=$(echo "$changed_files" | grep -E "$forbidden_pattern" || true)
+          if [ -n "$violations" ]; then
+            echo "::error::ai/* branch modified restricted paths:"
+            echo "$violations" | sed 's/^/::error::  /'
+            exit 1
+          fi
+
+      - name: Validate each changeset
+        if: steps.detect.outputs.changesets != ''
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r cs; do
+            [ -z "$cs" ] && continue
+            echo "::group::validate $cs"
+            odoo-deploy --repo . validate --changeset "$cs" || fail=1
+            echo "::endgroup::"
+          done <<< "${{ steps.detect.outputs.changesets }}"
+          exit $fail
+
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-reports
+          path: |
+            reports/validation/
+            reports/ai_feedback/
+          if-no-files-found: ignore

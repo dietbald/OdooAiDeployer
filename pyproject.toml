@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo-ai-deployer"
+version = "0.1.0"
+description = "Deterministic, AI-safe deployment engine for Odoo Online customizations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "TJ"}]
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+odoo-deploy = "deployer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/dietbald/OdooAiDeployer"
+Architecture = "https://github.com/dietbald/OdooAiDeployer/blob/main/docs/architecture.md"
+
+[tool.setuptools.packages.find]
+include = ["deployer*"]
+exclude = ["tests*", "templates*", "scripts*", "docs*"]

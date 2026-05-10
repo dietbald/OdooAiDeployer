@@ -1,0 +1,2 @@
+# Specific xml_ids AI is not allowed to touch.
+# Format: module.name (one per line).

@@ -1,0 +1,2 @@
+# Operation types that are entirely blocked for AI-authored changesets.
+# Empty by default. Add types here to disable them at this instance.

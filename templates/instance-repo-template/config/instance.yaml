@@ -1,0 +1,27 @@
+instance:
+  name: "{{INSTANCE_NAME}}"
+  description: "{{INSTANCE_DESCRIPTION}}"
+  odoo_version: "{{ODOO_VERSION}}"
+  edition: "{{ODOO_EDITION}}"
+
+# Companies that share this Odoo database. Pure documentation — the
+# deployer does not enforce per-company scoping.
+companies:
+  - "{{COMPANY_1}}"
+
+# Environments the deployer can target. Credentials live as GitHub
+# environment secrets (ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD)
+# per env, not in this file.
+environments:
+  - dev
+  - staging
+  - production
+
+policies:
+  auto_deploy_to_dev: true
+  require_staging_approval: true
+  require_production_approval: true
+  allow_force_on_dev: true
+  allow_force_on_staging: false
+  allow_force_on_production: false
+  production_deploy_from_main_only: true

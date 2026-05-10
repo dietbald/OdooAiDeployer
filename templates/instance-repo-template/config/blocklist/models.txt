@@ -1,0 +1,25 @@
+# Models AI is not allowed to author changesets against.
+# One model technical name per line. # starts a comment.
+
+# --- Auth & access control ---
+res.users
+res.groups
+ir.model.access
+ir.rule
+
+# --- Accounting (financial integrity) ---
+account.move
+account.move.line
+account.payment
+account.journal
+account.account
+account.tax
+
+# --- Payroll & HR contracts ---
+hr.payslip
+hr.contract
+hr.salary.rule
+
+# --- Payment providers / acquirer config ---
+payment.provider
+payment.transaction
