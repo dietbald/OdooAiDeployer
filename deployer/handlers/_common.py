@@ -1,8 +1,16 @@
 """Shared helpers used by typed handlers — kept private to the handlers package."""
 from __future__ import annotations
 
+import hashlib
+
 from .. import die
 from ..odoo_client import call
+
+
+def sha256_of(text: str) -> str:
+    """Stable hex sha256 of a string. Used by handlers to record canonical
+    state shas in audit operations (before/after) for env-alignment checks."""
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
 def _normalize_target(v):

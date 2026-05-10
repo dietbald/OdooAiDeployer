@@ -44,6 +44,12 @@ def load_manifest(paths: Paths, changeset_id: str) -> tuple[Path, dict]:
 
 def check_promotion_gate(paths: Paths, env_name: str,
                          changeset_id: str, sha: str) -> None:
+    """File-system gate: lower-env audits must exist with matching content sha.
+
+    Cheap (no Odoo connection). Runs before connect. Catches the case where
+    a changeset is being promoted but was never applied (or was applied with
+    different content) on a lower env.
+    """
     if env_name == "dev":
         return
     required = ["dev"] if env_name == "staging" else ["dev", "staging"]
@@ -68,6 +74,70 @@ def check_promotion_gate(paths: Paths, env_name: str,
             )
 
 
+def check_env_alignment(paths: Paths, env_name: str, changeset_id: str,
+                        manifest: dict, ctx: dict) -> None:
+    """Live-Odoo check: the target env's pre-deploy state for op 0 must match
+    what the lower env recorded as its pre-deploy state.
+
+    The change was tested on dev with starting state X. If staging/prod is
+    in state Y instead of X (because someone Studio-edited Odoo behind our
+    backs, or a previous changeset wasn't promoted), then the test isn't
+    valid for this env — refuse before doing any harm.
+
+    Only checks op 0 (sufficient: if op 0 starts from the same state on both
+    envs and the deployer is deterministic, ops 1..N also align). Skipped on
+    env=dev (where iteration is expected). Skipped per-op if the lower-env
+    audit is from before this feature shipped (no `before_sha256_canonical`
+    field), or if the handler doesn't expose `read_current_canonical_sha`.
+    """
+    if env_name == "dev":
+        return
+    operations = manifest.get("operations") or []
+    if not operations:
+        return
+    op0 = operations[0]
+    handler = DISPATCH.get(op0.get("type"))
+    if handler is None or not hasattr(handler, "read_current_canonical_sha"):
+        print(f"[align] op 0 ({op0.get('type')}): handler doesn't expose "
+              f"read_current_canonical_sha — env-alignment check skipped")
+        return
+
+    required = ["dev"] if env_name == "staging" else ["dev", "staging"]
+    for lower in required:
+        audit = audit_read(paths, lower, changeset_id)
+        if not audit:
+            continue  # absence already caught by check_promotion_gate
+        ops = audit.get("operations") or []
+        if not ops:
+            continue
+        expected = ops[0].get("before_sha256_canonical")
+        if not expected:
+            print(f"[align] {lower} audit op 0 has no before_sha256_canonical "
+                  f"(pre-feature audit) — env-alignment check skipped for {lower}")
+            continue
+        actual = handler.read_current_canonical_sha(ctx, op0)
+        if actual != expected:
+            die(
+                f"env-alignment check FAILED for op 0 ({op0.get('type')}, "
+                f"target={op0.get('xml_id') or op0.get('key')}).\n"
+                f"\n"
+                f"  expected (from {lower} audit): {expected[:20]}...\n"
+                f"  actual on {env_name}:           {actual[:20]}...\n"
+                f"\n"
+                f"The change was built and tested on '{lower}' against a starting\n"
+                f"state that does NOT match what '{env_name}' currently has. The\n"
+                f"test isn't valid for this env. Resolve by either:\n"
+                f"\n"
+                f"  1. Restore '{env_name}' to the expected baseline state\n"
+                f"     (often: run rollback for whatever drifted it, or re-clone\n"
+                f"     staging from prod if this is a fresh-pre-prod scenario), OR\n"
+                f"  2. Re-test the changeset on dev against '{env_name}'s current\n"
+                f"     state (deploy on dev with --force; the new dev audit will\n"
+                f"     record the new before_sha256_canonical, alignment will pass).\n"
+            )
+        print(f"[align] op 0 vs {lower} audit: MATCH")
+
+
 def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
                force: bool, dry_run: bool, commit: bool) -> int:
     if env_name not in VALID_ENVS:
@@ -84,6 +154,11 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
     print(f"[connect] env={env_name}")
     ctx = connect(expected_env_name=env_name)
     print(f"[connect] authenticated uid={ctx['uid']} db={ctx['db']}")
+
+    # Live env-alignment check: target env's pre-deploy state for op 0 must
+    # match the lower env's recorded before_sha256_canonical. Catches the
+    # "tested against state X, deployed against state Y" failure mode.
+    check_env_alignment(paths, env_name, changeset_id, manifest, ctx)
 
     existing = registry_lookup(ctx, changeset_id)
     if existing and existing.get("manifest_sha256") == sha and not force and not dry_run:

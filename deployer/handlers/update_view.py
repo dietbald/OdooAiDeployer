@@ -27,7 +27,7 @@ from __future__ import annotations
 from .. import Paths, die, load_file_text
 from ..audit import backup_record
 from ..odoo_client import call
-from ._common import resolve_xml_id_to_res_id
+from ._common import resolve_xml_id_to_res_id, sha256_of
 
 
 def _canonicalize_xml(text: str) -> str:
@@ -100,13 +100,20 @@ def apply(ctx: dict, op: dict, *, paths: Paths, env_name: str,
 
     current_canonical = _canonicalize_xml(current.get("arch_db") or "")
     target_canonical = _canonicalize_xml(target_arch)
+    before_sha = sha256_of(current_canonical)
+    target_sha = sha256_of(target_canonical)
+
     if current_canonical == target_canonical:
         return {"type": "update_view", "target": f"ir.ui.view:{view_id}",
-                "status": "skipped", "reason": "arch_db matches (canonical)"}
+                "status": "skipped", "reason": "arch_db matches (canonical)",
+                "before_sha256_canonical": before_sha,
+                "after_sha256_canonical": before_sha}
 
     if dry_run:
         return {"type": "update_view", "target": f"ir.ui.view:{view_id}",
                 "status": "would-update",
+                "before_sha256_canonical": before_sha,
+                "after_sha256_canonical": target_sha,
                 "current_preview": (current.get("arch_db") or "")[:200],
                 "target_preview": target_arch[:200]}
 
@@ -123,6 +130,8 @@ def apply(ctx: dict, op: dict, *, paths: Paths, env_name: str,
         "target": f"ir.ui.view:{view_id}",
         "status": "applied",
         "view_key": current.get("key"),
+        "before_sha256_canonical": before_sha,
+        "after_sha256_canonical": target_sha,
         "rollback_snapshot": str(backup_path.relative_to(paths.instance_root)) if backup_path else None,
     }
 
@@ -136,3 +145,17 @@ def verify(ctx: dict, op: dict, *, paths: Paths, changeset_id: str) -> dict:
                == _canonicalize_xml(target_arch))
     return {"type": "update_view", "target": f"ir.ui.view:{view_id}",
             "matches": matches}
+
+
+def read_current_canonical_sha(ctx: dict, op: dict) -> str:
+    """Return sha256 of the canonical form of the target view's current arch_db.
+
+    Used by deploy.check_env_alignment to verify that the env we're about to
+    deploy to is in the same starting state the changeset was tested against
+    on the lower env. If the lower env's audit recorded `before_sha256_canonical`
+    for op 0, this is the value compared against on the higher env.
+    """
+    view_id = _resolve_view_id(ctx, op)
+    current = call(ctx, "ir.ui.view", "read", [[view_id]],
+                   {"fields": ["arch_db"]})[0]
+    return sha256_of(_canonicalize_xml(current.get("arch_db") or ""))
