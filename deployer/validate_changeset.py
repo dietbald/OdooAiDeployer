@@ -30,18 +30,50 @@ from . import Paths, die, now_iso
 from .handlers import DISPATCH
 from .hash_changeset import changeset_sha256
 
+# Defence-in-depth only: Odoo's `safe_eval` is the real boundary. We catch
+# the common mistakes early so AI gets fast feedback in CI instead of a
+# server-side traceback. Bypasses exist (e.g. `getattr(__builtins__, 'ev'+'al')`)
+# and that's fine — they would still be rejected by safe_eval at runtime.
+
+# Names whose direct call is rejected outright.
 FORBIDDEN_NAMES = {
     "__import__", "eval", "exec", "compile", "open",
     "input", "globals", "locals", "vars", "delattr", "setattr",
+    "getattr",  # almost always used to bypass other checks; if AI legitimately
+                # needs a dynamic attr, route through env directly
 }
-FORBIDDEN_MODULE_PREFIXES = (
+
+# Attribute chains that escape Odoo's safe surface — raw cursor (SQL),
+# environment cred peeks, MRO/subclass walks used to reach builtins.
+FORBIDDEN_ATTR_NAMES = {
+    "_cr", "_uid",                          # raw SQL + impersonation
+    "__class__", "__bases__", "__subclasses__", "__mro__",
+    "__globals__", "__builtins__", "__import__",
+    "__dict__", "__getattribute__",
+}
+
+# Top-level module names whose attribute access is blocked.
+FORBIDDEN_MODULE_NAMES = {
     "os", "sys", "subprocess", "socket", "requests", "urllib",
     "http", "ftplib", "smtplib", "pathlib", "shutil", "ctypes",
+    "importlib",
+}
+
+# Pre-bound names available in Odoo's safe_eval context (no import needed).
+# Listed here so the error message can tell AI what to use instead.
+PRE_BOUND_HINT = (
+    "env, record(s), model, log, time, datetime, timedelta, date, math, "
+    "pytz, dateutil, relativedelta, Warning, UserError, ValidationError"
 )
+
 GENERIC_OPS = {"create_record", "update_record"}
 
 
 def _check_python_body(code: str, source: str) -> list[dict]:
+    """Reject code that wouldn't survive Odoo's safe_eval.
+
+    Bypasses exist by design (we don't try to be a sandbox) — Odoo enforces.
+    """
     issues: list[dict] = []
     try:
         tree = ast.parse(code)
@@ -49,32 +81,35 @@ def _check_python_body(code: str, source: str) -> list[dict]:
         return [{"file": source, "line": exc.lineno or 0,
                  "msg": f"Python syntax error: {exc.msg}"}]
 
+    import_msg = (f"imports are not allowed in Odoo server actions / cron / "
+                  f"automation code (safe_eval). Use the pre-bound names "
+                  f"directly: {PRE_BOUND_HINT}")
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                issues.append({
-                    "file": source, "line": node.lineno,
-                    "msg": f"`import {alias.name}` is not allowed in Odoo server actions / cron / automation code",
-                })
+                issues.append({"file": source, "line": node.lineno,
+                               "msg": f"`import {alias.name}` — {import_msg}"})
         elif isinstance(node, ast.ImportFrom):
             mod = node.module or ""
-            if any(mod == p or mod.startswith(p + ".") for p in FORBIDDEN_MODULE_PREFIXES) or True:
-                issues.append({
-                    "file": source, "line": node.lineno,
-                    "msg": f"`from {mod} import ...` is not allowed in Odoo server actions / cron / automation code",
-                })
+            issues.append({"file": source, "line": node.lineno,
+                           "msg": f"`from {mod} import ...` — {import_msg}"})
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             if node.func.id in FORBIDDEN_NAMES:
-                issues.append({
-                    "file": source, "line": node.lineno,
-                    "msg": f"`{node.func.id}(...)` is not allowed in Odoo server actions / cron / automation code",
-                })
-        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            if node.value.id in {"os", "sys", "subprocess", "socket"}:
-                issues.append({
-                    "file": source, "line": node.lineno,
-                    "msg": f"`{node.value.id}.{node.attr}` is not allowed in Odoo server actions / cron / automation code",
-                })
+                issues.append({"file": source, "line": node.lineno,
+                               "msg": f"`{node.func.id}(...)` is rejected by Odoo safe_eval"})
+        elif isinstance(node, ast.Attribute):
+            # Block <module>.<anything> for known-dangerous module names
+            if (isinstance(node.value, ast.Name)
+                    and node.value.id in FORBIDDEN_MODULE_NAMES):
+                issues.append({"file": source, "line": node.lineno,
+                               "msg": f"`{node.value.id}.{node.attr}` "
+                                      f"references a forbidden module"})
+            # Block dangerous attribute names regardless of receiver
+            if node.attr in FORBIDDEN_ATTR_NAMES:
+                issues.append({"file": source, "line": node.lineno,
+                               "msg": f"`.{node.attr}` is a sandbox-escape "
+                                      f"vector and not allowed"})
     return issues
 
 

@@ -104,6 +104,7 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
           f"({len(manifest['operations'])} operations)"
           f"{' [DRY RUN]' if dry_run else ''}")
 
+    started_at = now_iso()
     op_results: list[dict] = []
     failed_index: int | None = None
     failure_error: str | None = None
@@ -147,7 +148,7 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
         "git_commit_sha": git_sha,
         "manifest_sha256": sha,
         "status": status,
-        "started_at": now_iso(),
+        "started_at": started_at,
         "finished_at": now_iso(),
         "applied_by": "ai" if env_name == "dev" else "tj",
         "description": manifest.get("description", ""),

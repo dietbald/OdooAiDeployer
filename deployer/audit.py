@@ -10,8 +10,10 @@ Two layers of recording:
    after a successful apply. These are the promotion gate's source of
    truth and the AI feedback loop's failure record.
 
-Backups (`rollback_snapshots/<env>/<changeset>/`) are gitignored content
-snapshots taken before every write — used by the rollback engine.
+Backups (`rollback_snapshots/<env>/<changeset>/`) are git-tracked content
+snapshots taken before every write — used by the rollback engine. They are
+NOT gitignored: rollback after a CI run depends on the snapshot being in
+the repo (see `templates/instance-repo-template/.gitignore`).
 """
 from __future__ import annotations
 
