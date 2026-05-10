@@ -114,12 +114,22 @@ def main() -> int:
     }
     copy_template(target, mapping)
     if len(args.companies) > 1:
-        # Append remaining companies to instance.yaml
+        # Insert remaining company entries directly after the {{COMPANY_1}} line
+        # (which has already been substituted to args.companies[0]).
         cfg = target / "config" / "instance.yaml"
-        text = cfg.read_text()
-        for c in args.companies[1:]:
-            text += f'  - "{c}"\n'
-        cfg.write_text(text)
+        lines = cfg.read_text().splitlines(keepends=True)
+        first_line = f'  - "{args.companies[0]}"\n'
+        out: list[str] = []
+        inserted = False
+        for line in lines:
+            out.append(line)
+            if not inserted and line == first_line:
+                for c in args.companies[1:]:
+                    out.append(f'  - "{c}"\n')
+                inserted = True
+        if not inserted:
+            print(f"WARNING: could not locate '{first_line.strip()}' in instance.yaml — additional companies not inserted")
+        cfg.write_text("".join(out))
 
     print("Committing and pushing ...")
     run(["git", "add", "."], cwd=target)
