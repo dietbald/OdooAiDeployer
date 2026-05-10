@@ -32,8 +32,9 @@ The engine is `pip install`ed by each instance's CI workflows:
 - **Two-layer audit** — `ir.config_parameter` row inside the Odoo DB (travels with clones) plus git-tracked `audits/<env>/<id>.json` files (the promotion gate).
 - **Promotion gate** — `production` refuses unless `dev` AND `staging` audits exist with matching `manifest_sha256`. Content edits after a lower env's apply force a re-promotion.
 - **Operation-level rollback** — pre-write snapshots in `rollback_snapshots/<env>/<id>/`; rollback workflow restores in reverse order.
-- **Baseline exporter** — captures Odoo customization records into `baseline/<env>/` for diffs and drift detection.
-- **6 GitHub Actions workflows** — `validate`, `deploy-dev`, `promote-staging`, `promote-prod`, `rollback`, `export-baseline`. Approvals via GitHub environment protection rules.
+- **5 GitHub Actions workflows** — `validate`, `deploy-dev`, `promote-staging`, `promote-prod`, `rollback`. Approvals via GitHub environment protection rules.
+
+> **Out of scope for v1:** baseline export and drift detection. Pure changeset-driven tracking — the in-DB registry says what's been deployed; per-operation rollback snapshots cover undo. Snapshotting all of Odoo's customization records into git would be ~150 MB of mostly-noise (stock module fields, stock views) and only earns its keep once we want drift detection. Deferred to V2 when there's a real reason to add it.
 
 ## Three environments
 
@@ -54,7 +55,6 @@ odoo-deploy --repo <instance-repo-path> <subcommand> [args]
   verify           Read-only state check
   rollback         Restore a previous deployment
   status           Show audit + registry state across envs
-  export-baseline  Export Odoo state into baseline/<env>/
 ```
 
 Required env vars (set as GitHub environment secrets in CI; sourced from `envs/<env>.env` locally):
@@ -73,7 +73,7 @@ reports/ai_feedback/**
 docs/changeset-notes/**
 ```
 
-AI must not edit `deployer/**`, `.github/workflows/**`, `config/**`, audits or rollback snapshots for `staging`/`production`, or `baseline/prod/**`. The validator's restricted-folder guard fails CI for `ai/*` branches that touch any of these.
+AI must not edit `deployer/**`, `.github/workflows/**`, `config/**`, or audits / rollback snapshots for `staging`/`production`. The validator's restricted-folder guard fails CI for `ai/*` branches that touch any of these.
 
 If AI needs a new operation type, ask TJ to add a handler under `deployer/handlers/` and register it in `DISPATCH`. Inline Python deploy code in changesets is never accepted.
 
@@ -91,6 +91,8 @@ python scripts/bootstrap_instance_repo.py \
 
 The script clones the empty GitHub repo, copies `templates/instance-repo-template/` into it, fills the placeholders in `config/instance.yaml`, creates the three GitHub environments via the API, and prints manual instructions for adding the credential secrets and required reviewers.
 
+After bootstrap, you author your first changeset — there's no baseline-export step. Pure changeset-driven flow.
+
 ## Layout
 
 ```
@@ -102,7 +104,6 @@ OdooAiDeployer/
 │   ├── validate_changeset.py  # static validation
 │   ├── preflight.py           # Odoo-aware validation
 │   ├── rollback.py            # operation-level rollback
-│   ├── export_baseline.py     # baseline exporter
 │   ├── audit.py               # audit files + in-DB registry
 │   ├── hash_changeset.py      # content sha256
 │   ├── odoo_client.py         # XML-RPC connection

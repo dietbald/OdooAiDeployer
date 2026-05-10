@@ -53,15 +53,7 @@ done
 
 In the GitHub UI: **Settings → Environments → staging → Required reviewers**, add yourself. Repeat for production.
 
-### 5. Capture the baseline
-
-```bash
-gh workflow run export-baseline.yml --repo dietbald/MyInstanceOdoo -f env=production
-```
-
-This runs `odoo-deploy export-baseline --env production`, captures every supported customization record into `baseline/production/`, and commits it. **Do this before authoring any changeset** — otherwise drift detection has no reference and rollback can't tell you what production "originally" looked like.
-
-### 6. Author your first changeset
+### 5. Author your first changeset
 
 ```bash
 git checkout -b ai/001_your_first_change

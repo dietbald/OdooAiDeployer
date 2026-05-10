@@ -158,9 +158,10 @@ Production deployment is never automatic.
 ├── deploy-dev.yml
 ├── promote-staging.yml
 ├── promote-prod.yml
-├── rollback.yml
-└── export-baseline.yml
+└── rollback.yml
 ```
+
+> Baseline export workflow + module are **deferred to V2** (see §13). Pure changeset-driven tracking in v1; no baseline snapshots in git.
 
 ### validate.yml
 
@@ -181,10 +182,6 @@ Triggered manually. Verifies dev AND staging passed with matching sha. Verifies 
 ### rollback.yml
 
 Triggered manually. Loads rollback snapshot, shows preview, requires manual approval for staging/production, restores previous values operation-by-operation, verifies, creates rollback audit file.
-
-### export-baseline.yml
-
-Triggered manually. Connects to the chosen env, exports supported customization records into `baseline/<env>/`, commits.
 
 ---
 
@@ -279,31 +276,18 @@ Validation and deploy failures produce `reports/ai_feedback/<changeset_id>.md` p
 
 ---
 
-## 13. Baseline Export & Drift Detection
+## 13. Baseline Export & Drift Detection — DEFERRED to V2
 
-### 13.1 What to Export
+The original design called for exporting all customization records (`ir.ui.view`, `ir.actions.server`, `base.automation`, `ir.cron`, `ir.model.fields`, `ir.ui.menu`, `mail.template`, etc.) into `baseline/<env>/` so a drift detector could compare it against live Odoo and surface manual / Studio changes.
 
-Minimum baseline (per environment):
+**Removed from v1.** A real run against BICC produced ~150 MB of mostly-noise — 22 K stock `ir.model.fields` rows from Odoo core modules that are byte-identical across every Odoo 19 install, plus 5 K stock views. The signal-to-noise was too low to justify carrying the snapshot in git, and v1 doesn't have a drift detector to consume it anyway.
 
-```
-ir.ui.view
-ir.actions.server
-base.automation
-ir.cron
-ir.model.fields
-ir.ui.menu
-ir.actions.act_window
-mail.template
-ir.model.access
-ir.rule
-website.page
-```
+V1 ships pure changeset-driven tracking instead:
+- The in-DB `ir.config_parameter` registry says what's been deployed.
+- Per-operation `rollback_snapshots/<env>/<id>/` files (taken at deploy time, not bulk-export time) cover undo.
+- The audit files in `audits/<env>/<id>.json` are the promotion gate.
 
-Each record records: model, db_id, xml_id (if any), key (if any), name, write_date, payload, sha256, exported_at.
-
-### 13.2 Drift Detection
-
-A scheduled or manual workflow compares current production Odoo against `baseline/prod`. Detects Odoo Studio changes, manual view edits, untracked server actions, etc. If drift is detected: create drift report, block production deployment until reviewed, either import drift into Git as a changeset or revert unauthorized changes.
+When V2 brings drift detection, the baseline export will return — but scoped to *modified* records only (records whose `write_date` is later than the install date of their owning module, or records with no module xml_id at all). That filters out the stock 22 K and leaves a meaningful diff target.
 
 ---
 
@@ -369,7 +353,6 @@ AI pushes to `ai/*`. Validation runs and dev deploys. TJ reviews and merges to `
 ```
 - master deployer repo
 - one BICC/IGEBC instance repo
-- baseline exporter
 - static validator
 - Odoo-aware validator
 - changeset hashing
@@ -381,7 +364,7 @@ AI pushes to `ai/*`. Validation runs and dev deploys. TJ reviews and merges to `
 - AI feedback markdown report
 ```
 
-No web dashboard in V1 — GitHub Actions UI is enough.
+No web dashboard in V1 — GitHub Actions UI is enough. No baseline export / drift detection in V1 — see §13.
 
 ---
 

@@ -7,7 +7,6 @@ Subcommands:
     verify            Read-only state check against an env
     rollback          Restore a previous deployment from snapshots
     status            Print audit + registry state across all envs
-    export-baseline   Capture current Odoo state into baseline/<env>/
 
 Every subcommand operates against an instance repository identified by
 --repo (default: cwd). The deployer code itself lives in OdooAiDeployer
@@ -16,16 +15,13 @@ and contains no instance-specific state.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 from . import Paths, VALID_ENVS, __version__, die
-from .audit import audit_read, registry_lookup
+from .audit import audit_read
 from .deploy import cmd_deploy
-from .export_baseline import cmd_export_baseline
 from .hash_changeset import changeset_sha256
-from .odoo_client import connect
 from .preflight import cmd_preflight
 from .rollback import cmd_rollback
 from .validate_changeset import cmd_validate
@@ -90,10 +86,6 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("status", help="Show audit + registry state across envs")
     s.add_argument("--changeset", required=True)
 
-    s = sub.add_parser("export-baseline",
-                       help="Export Odoo state into baseline/<env>/")
-    s.add_argument("--env", choices=VALID_ENVS, default="production")
-
     args = p.parse_args(argv)
 
     repo_root = Path(args.repo).resolve()
@@ -116,8 +108,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_rollback(paths, args.env, args.changeset, dry_run=args.dry_run)
     if args.cmd == "status":
         return cmd_status(paths, args.changeset)
-    if args.cmd == "export-baseline":
-        return cmd_export_baseline(paths, args.env)
     die(f"unknown command: {args.cmd}")
 
 

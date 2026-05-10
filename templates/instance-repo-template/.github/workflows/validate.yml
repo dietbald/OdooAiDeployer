@@ -55,7 +55,7 @@ jobs:
         run: |
           set -e
           changed_files=$(git diff --name-only "origin/main...HEAD" 2>/dev/null || git diff --name-only HEAD~1...HEAD)
-          forbidden_pattern='^(deployer/|\.github/workflows/|config/(?!blocklist/)|audits/(staging|production)/|rollback_snapshots/(staging|production)/|baseline/prod/)'
+          forbidden_pattern='^(deployer/|\.github/workflows/|config/(?!blocklist/)|audits/(staging|production)/|rollback_snapshots/(staging|production)/)'
           violations=$(echo "$changed_files" | grep -E "$forbidden_pattern" || true)
           if [ -n "$violations" ]; then
             echo "::error::ai/* branch modified restricted paths:"

@@ -5,13 +5,12 @@ Instance repository for the {{INSTANCE_NAME}} Odoo database. Managed through the
 ## What lives here
 
 - `changesets/<id>/` — one folder per change. AI may add and edit these on `ai/*` branches.
-- `baseline/<env>/` — exported snapshot of Odoo customization records. Used as a known-good reference for diffs and drift detection.
 - `audits/<env>/<id>.json` — promotion proof, written by the runner after each successful deploy.
 - `rollback_snapshots/<env>/<id>/` — pre-write content snapshots used by the rollback workflow.
 - `reports/validation/`, `reports/deployment/`, `reports/ai_feedback/` — CI outputs, including the markdown feedback file the AI reads when validation fails.
 - `config/instance.yaml` — instance identity (name, odoo version, edition, companies).
 - `config/blocklist/` — text files listing things AI is not allowed to touch (models, xml_ids, operation types).
-- `.github/workflows/` — validate, deploy-dev, promote-staging, promote-prod, rollback, export-baseline.
+- `.github/workflows/` — validate, deploy-dev, promote-staging, promote-prod, rollback.
 
 ## Deploy flow
 
@@ -43,7 +42,6 @@ Production refuses deployment unless dev AND staging both have a passing audit f
 | `config/**` | No |
 | `audits/staging/**`, `audits/production/**` | No |
 | `rollback_snapshots/staging/**`, `rollback_snapshots/production/**` | No |
-| `baseline/prod/**` | No |
 
 CI fails validation if an `ai/*` branch modifies any restricted path.
 
