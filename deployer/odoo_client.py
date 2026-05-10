@@ -79,10 +79,14 @@ def connect(expected_env_name: str | None = None,
     if expected_env_name is not None:
         _assert_env_matches(expected_env_name)
     c = creds or env_creds()
-    url = c["ODOO_URL"].rstrip("/")
-    db = c["ODOO_DB"]
-    user = c["ODOO_USERNAME"]
-    pw = c["ODOO_PASSWORD"]
+    # .strip() each credential — guards against trailing newlines that
+    # `echo "value" | gh secret set` (and similar pipelines) silently add.
+    # Without this, ODOO_URL ends up as 'https://...com\n' and ServerProxy
+    # rejects with 'unsupported XML-RPC protocol'.
+    url = c["ODOO_URL"].strip().rstrip("/")
+    db = c["ODOO_DB"].strip()
+    user = c["ODOO_USERNAME"].strip()
+    pw = c["ODOO_PASSWORD"].strip()
     common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common", allow_none=True)
     try:
         uid = common.authenticate(db, user, pw, {})
