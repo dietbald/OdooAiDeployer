@@ -65,5 +65,8 @@ jobs:
             echo "Nothing to commit."
           else
             git commit -m "rollback: ${{ github.event.inputs.env }}/${{ github.event.inputs.changeset }}"
-            git push origin HEAD:main
+            # Push back to the trigger ref, not always main. dev rollbacks live on
+            # ai/* branches; staging/prod rollbacks are triggered from main and
+            # push back to main symmetrically.
+            git push origin "HEAD:${{ github.ref_name }}"
           fi
