@@ -18,7 +18,7 @@ from .odoo_client import call, connect
 def cmd_preflight(paths: Paths, env_name: str, changeset_id: str) -> int:
     cdir, manifest = load_manifest(paths, changeset_id)
     print(f"[preflight] env={env_name}")
-    ctx = connect()
+    ctx = connect(expected_env_name=env_name)
     print(f"[preflight] authenticated uid={ctx['uid']} db={ctx['db']}")
 
     issues: list[str] = []

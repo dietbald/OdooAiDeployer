@@ -41,21 +41,44 @@ jobs:
       - name: Install OdooAiDeployer
         run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
 
+      - name: Validate inputs (shell-safety)
+        env:
+          CS: ${{ github.event.inputs.changeset }}
+          ENV_NAME: ${{ github.event.inputs.env }}
+        run: |
+          set -e
+          if ! [[ "$CS" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+            echo "::error::Refusing changeset name '$CS' — must match ^[A-Za-z0-9][A-Za-z0-9_.-]*\$."
+            exit 1
+          fi
+          # The env input is a `type: choice` so values are constrained, but
+          # belt-and-braces in case someone widens it later.
+          case "$ENV_NAME" in
+            dev|staging|production) ;;
+            *) echo "::error::Invalid env '$ENV_NAME'"; exit 1 ;;
+          esac
+
       - name: Roll back
         env:
           ODOO_URL: ${{ secrets.ODOO_URL }}
           ODOO_DB: ${{ secrets.ODOO_DB }}
           ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
           ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          ODOO_ENV_NAME: ${{ github.event.inputs.env }}
+          CS: ${{ github.event.inputs.changeset }}
+          ENV_NAME: ${{ github.event.inputs.env }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           set -e
           DRY=""
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
-          odoo-deploy --repo . rollback --env "${{ github.event.inputs.env }}" \
-            --changeset "${{ github.event.inputs.changeset }}" $DRY
+          if [ "$DRY_RUN" = "true" ]; then DRY="--dry-run"; fi
+          odoo-deploy --repo . rollback --env "$ENV_NAME" --changeset "$CS" $DRY
 
       - name: Commit rollback audit
         if: github.event.inputs.dry_run != 'true'
+        env:
+          CS: ${{ github.event.inputs.changeset }}
+          ENV_NAME: ${{ github.event.inputs.env }}
         run: |
           set -e
           git config user.name "github-actions[bot]"
@@ -64,7 +87,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
-            git commit -m "rollback: ${{ github.event.inputs.env }}/${{ github.event.inputs.changeset }}"
+            git commit -m "rollback: $ENV_NAME/$CS"
             # Push back to the trigger ref, not always main. dev rollbacks live on
             # ai/* branches; staging/prod rollbacks are triggered from main and
             # push back to main symmetrically.

@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -28,8 +28,20 @@ jobs:
       - name: Install OdooAiDeployer
         run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
 
+      - name: Validate changeset name (shell-safety)
+        env:
+          CS: ${{ github.event.inputs.changeset }}
+        run: |
+          set -e
+          if ! [[ "$CS" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+            echo "::error::Refusing changeset name '$CS' — must match ^[A-Za-z0-9][A-Za-z0-9_.-]*\$."
+            exit 1
+          fi
+
       - name: Validate before promote
-        run: odoo-deploy --repo . validate --changeset "${{ github.event.inputs.changeset }}"
+        env:
+          CS: ${{ github.event.inputs.changeset }}
+        run: odoo-deploy --repo . validate --changeset "$CS"
 
       - name: Deploy to staging
         env:
@@ -37,9 +49,10 @@ jobs:
           ODOO_DB: ${{ secrets.ODOO_DB }}
           ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
           ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          ODOO_ENV_NAME: staging
+          CS: ${{ github.event.inputs.changeset }}
         run: |
-          odoo-deploy --repo . deploy --env staging \
-            --changeset "${{ github.event.inputs.changeset }}" --no-commit
+          odoo-deploy --repo . deploy --env staging --changeset "$CS" --no-commit
 
       - name: Verify post-deploy
         env:
@@ -47,11 +60,14 @@ jobs:
           ODOO_DB: ${{ secrets.ODOO_DB }}
           ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
           ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          ODOO_ENV_NAME: staging
+          CS: ${{ github.event.inputs.changeset }}
         run: |
-          odoo-deploy --repo . verify --env staging \
-            --changeset "${{ github.event.inputs.changeset }}"
+          odoo-deploy --repo . verify --env staging --changeset "$CS"
 
       - name: Commit audit + rollback snapshot
+        env:
+          CS: ${{ github.event.inputs.changeset }}
         run: |
           set -e
           git config user.name "github-actions[bot]"
@@ -60,6 +76,10 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
-            git commit -m "deploy: staging/${{ github.event.inputs.changeset }}"
-            git push origin HEAD:main
+            git commit -m "deploy: staging/$CS"
+            # Push back to the trigger ref. Promote workflows are conventionally
+            # triggered from main, so this is HEAD:main in practice — but using
+            # ref_name keeps behavior symmetric across all the promotion/rollback
+            # workflows and avoids the bug we hit when rollback hardcoded HEAD:main.
+            git push origin "HEAD:${{ github.ref_name }}"
           fi

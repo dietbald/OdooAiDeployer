@@ -62,14 +62,30 @@ jobs:
             echo "Will deploy:"; echo "$changed"
           fi
 
+      - name: Validate changeset names (shell-safety)
+        if: steps.detect.outputs.changesets != ''
+        env:
+          CHANGESETS: ${{ steps.detect.outputs.changesets }}
+        run: |
+          set -e
+          while IFS= read -r cs; do
+            [ -z "$cs" ] && continue
+            if ! [[ "$cs" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+              echo "::error::Refusing changeset name '$cs' — must match ^[A-Za-z0-9][A-Za-z0-9_.-]*\$. Folder names with spaces, quotes, or shell metacharacters are blocked to prevent command injection in commit messages."
+              exit 1
+            fi
+          done <<< "$CHANGESETS"
+
       - name: Validate before deploy
         if: steps.detect.outputs.changesets != ''
+        env:
+          CHANGESETS: ${{ steps.detect.outputs.changesets }}
         run: |
           set -e
           while IFS= read -r cs; do
             [ -z "$cs" ] && continue
             odoo-deploy --repo . validate --changeset "$cs"
-          done <<< "${{ steps.detect.outputs.changesets }}"
+          done <<< "$CHANGESETS"
 
       - name: Deploy each changeset to dev
         if: steps.detect.outputs.changesets != ''
@@ -78,6 +94,8 @@ jobs:
           ODOO_DB: ${{ secrets.ODOO_DB }}
           ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
           ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          ODOO_ENV_NAME: dev
+          CHANGESETS: ${{ steps.detect.outputs.changesets }}
         run: |
           set -e
           while IFS= read -r cs; do
@@ -85,7 +103,7 @@ jobs:
             echo "::group::deploy dev $cs"
             odoo-deploy --repo . deploy --env dev --changeset "$cs" --force --no-commit
             echo "::endgroup::"
-          done <<< "${{ steps.detect.outputs.changesets }}"
+          done <<< "$CHANGESETS"
 
       - name: Verify post-deploy
         if: steps.detect.outputs.changesets != ''
@@ -94,15 +112,19 @@ jobs:
           ODOO_DB: ${{ secrets.ODOO_DB }}
           ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
           ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          ODOO_ENV_NAME: dev
+          CHANGESETS: ${{ steps.detect.outputs.changesets }}
         run: |
           set -e
           while IFS= read -r cs; do
             [ -z "$cs" ] && continue
             odoo-deploy --repo . verify --env dev --changeset "$cs"
-          done <<< "${{ steps.detect.outputs.changesets }}"
+          done <<< "$CHANGESETS"
 
       - name: Commit audit + rollback snapshot
         if: steps.detect.outputs.changesets != ''
+        env:
+          CHANGESETS: ${{ steps.detect.outputs.changesets }}
         run: |
           set -e
           git config user.name "github-actions[bot]"
@@ -111,7 +133,11 @@ jobs:
           if git diff --cached --quiet; then
             echo "Nothing to commit."
           else
-            git commit -m "deploy: dev/$(echo '${{ steps.detect.outputs.changesets }}' | tr '\n' ' ' | sed 's/ $//')"
+            # CHANGESETS already validated against safe regex above; passing
+            # through bash variable expansion (not direct ${{ }} interpolation)
+            # avoids YAML/shell injection.
+            cs_summary=$(echo "$CHANGESETS" | tr '\n' ' ' | sed 's/ $//')
+            git commit -m "deploy: dev/$cs_summary"
             git push origin "HEAD:${{ github.ref_name }}"
           fi
 

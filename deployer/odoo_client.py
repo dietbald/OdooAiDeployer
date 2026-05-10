@@ -9,6 +9,12 @@ Required env vars:
     ODOO_DB        — database name
     ODOO_USERNAME  — login email
     ODOO_PASSWORD  — password or API key
+    ODOO_ENV_NAME  — 'dev' | 'staging' | 'production' — must match --env
+
+ODOO_ENV_NAME is the env-mismatch sentinel: connect() asserts it equals the
+expected env passed by the CLI. This catches the failure mode where a
+workflow accidentally exposes the wrong env's secrets (e.g. production
+credentials reach a job invoked with --env dev).
 """
 from __future__ import annotations
 
@@ -40,8 +46,38 @@ def env_creds() -> dict[str, str]:
     return out
 
 
-def connect(creds: dict[str, str] | None = None) -> dict[str, Any]:
-    """Authenticate against Odoo. Returns a context dict for call()."""
+def _assert_env_matches(expected_env_name: str) -> None:
+    """Refuse to connect if ODOO_ENV_NAME doesn't match the CLI --env flag."""
+    actual = os.environ.get("ODOO_ENV_NAME")
+    if actual is None:
+        die(
+            f"refusing to connect: ODOO_ENV_NAME is not set.\n"
+            f"GitHub Actions workflows must set:\n"
+            f"  env:\n"
+            f"    ODOO_ENV_NAME: {expected_env_name}\n"
+            f"so the deployer can prove the loaded secrets match the --env flag.\n"
+            f"Locally: `export ODOO_ENV_NAME={expected_env_name}` before running."
+        )
+    if actual != expected_env_name:
+        die(
+            f"environment mismatch — refusing to connect.\n"
+            f"  --env flag says: {expected_env_name!r}\n"
+            f"  ODOO_ENV_NAME says: {actual!r}\n"
+            f"This usually means a workflow loaded the wrong env's secrets, or\n"
+            f"a local shell sourced the wrong envs/<env>.env file."
+        )
+
+
+def connect(expected_env_name: str | None = None,
+            creds: dict[str, str] | None = None) -> dict[str, Any]:
+    """Authenticate against Odoo. Returns a context dict for call().
+
+    `expected_env_name`: if set, asserts ODOO_ENV_NAME matches before any
+    network call. CLI subcommands always pass this; library callers may
+    skip if they know what they're doing.
+    """
+    if expected_env_name is not None:
+        _assert_env_matches(expected_env_name)
     c = creds or env_creds()
     url = c["ODOO_URL"].rstrip("/")
     db = c["ODOO_DB"]

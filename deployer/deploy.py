@@ -82,7 +82,7 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
     check_promotion_gate(paths, env_name, changeset_id, sha)
 
     print(f"[connect] env={env_name}")
-    ctx = connect()
+    ctx = connect(expected_env_name=env_name)
     print(f"[connect] authenticated uid={ctx['uid']} db={ctx['db']}")
 
     existing = registry_lookup(ctx, changeset_id)
@@ -158,17 +158,35 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
         audit_payload["failed_operation"] = failed_index
         audit_payload["error"] = failure_error
         audit_payload["completed_operations"] = list(range(failed_index))
+        audit_payload["recovery_hint"] = (
+            f"Run `odoo-deploy --repo . rollback --env {env_name} --changeset "
+            f"{changeset_id}` to undo ops 0..{failed_index - 1}, OR fix the "
+            f"changeset and re-deploy with --force on dev. Do NOT re-deploy "
+            f"without rolling back: ops 0..{failed_index - 1} would re-snapshot "
+            f"the now-mutated state as the 'before' baseline, losing the true "
+            f"pre-deploy reference."
+        )
+
+    # Order matters: write registry first (in-DB, authoritative for "what's
+    # on this DB"), then the audit file (git-tracked, authoritative for
+    # "what's promotable"). If audit-write fails after registry succeeds,
+    # the next gate refuses to promote (no audit) and re-running with --force
+    # is safe (registry/state match → idempotent skip → audit re-written).
+    # The reverse order would let the audit lie: claim 'deployed' on disk
+    # while the in-DB registry has no record.
+    if failed_index is None:
+        registry_record(ctx, changeset_id, git_sha, sha)
 
     audit_path = audit_write(paths, env_name, changeset_id, audit_payload)
     print(f"[audit] wrote {audit_path.relative_to(paths.instance_root)}")
-
-    if failed_index is None:
-        registry_record(ctx, changeset_id, git_sha, sha)
 
     if commit:
         msg = f"deploy: {env_name}/{changeset_id} ({status})"
         committed = git_commit(paths.instance_root, [audit_path], msg)
         if committed:
             print(f"[git] committed: {msg}")
+
+    if status == "failed_partial":
+        print(f"[recovery] {audit_payload['recovery_hint']}")
 
     return 0 if status == "deployed" else 2

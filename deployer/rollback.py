@@ -25,7 +25,7 @@ def cmd_rollback(paths: Paths, env_name: str, changeset_id: str,
         die(f"no audit file at audits/{env_name}/{changeset_id}.json — nothing to roll back")
 
     print(f"[rollback] env={env_name} changeset={changeset_id}")
-    ctx = connect()
+    ctx = connect(expected_env_name=env_name)
     print(f"[rollback] authenticated uid={ctx['uid']} db={ctx['db']}")
 
     operations = audit.get("operations") or []
