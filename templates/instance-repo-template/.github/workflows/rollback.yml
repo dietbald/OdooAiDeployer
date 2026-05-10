@@ -27,7 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          # Use the ref the workflow was triggered from, not always main:
+          # dev rollbacks happen on ai/* branches before PR merge; staging/prod
+          # rollbacks should be triggered from main where the audit lives.
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
