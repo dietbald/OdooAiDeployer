@@ -7,6 +7,9 @@ on:
         description: "Changeset id to promote to production"
         required: true
 
+permissions:
+  contents: write
+
 jobs:
   promote-prod:
     runs-on: ubuntu-latest

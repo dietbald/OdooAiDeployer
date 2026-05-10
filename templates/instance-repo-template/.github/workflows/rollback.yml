@@ -17,6 +17,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write
+
 jobs:
   rollback:
     runs-on: ubuntu-latest
