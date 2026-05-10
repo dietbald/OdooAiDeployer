@@ -53,7 +53,15 @@ done
 
 In the GitHub UI: **Settings → Environments → staging → Required reviewers**, add yourself. Repeat for production.
 
-### 5. Author your first changeset
+### 5. Capture the baseline
+
+```bash
+gh workflow run export-baseline.yml --repo dietbald/MyInstanceOdoo -f env=production
+```
+
+Snapshots the customization layer (views, server actions, automations, crons, custom field definitions, menus, mail templates, ACLs, record rules, custom models) into `baseline/production/`. Skips business data (products, partners, orders, invoices, employees) by design. Run before authoring any changeset so you have a known-good reference for diffs and rollback planning.
+
+### 6. Author your first changeset
 
 ```bash
 git checkout -b ai/001_your_first_change

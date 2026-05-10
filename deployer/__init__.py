@@ -11,14 +11,12 @@ Public modules:
     validate_changeset     — static validation
     preflight              — Odoo-aware pre-deploy validation
     rollback               — operation-level rollback
+    export_baseline        — capture the customization layer into baseline/
     audit                  — audit files + in-DB registry + git commit
     hash_changeset         — content-hash a changeset folder
     odoo_client            — XML-RPC connection + call wrapper
     github_setup           — gh API helpers for bootstrapping new instance repos
     handlers               — one module per supported operation type
-
-Baseline export / drift detection are intentionally NOT in v1 — see
-docs/architecture.md for the rationale and the V2 plan.
 """
 from __future__ import annotations
 
@@ -63,6 +61,7 @@ class Paths:
         self.changesets = self.instance_root / "changesets"
         self.audits = self.instance_root / "audits"
         self.rollback_snapshots = self.instance_root / "rollback_snapshots"
+        self.baseline = self.instance_root / "baseline"
         self.reports = self.instance_root / "reports"
         self.config = self.instance_root / "config"
         self.logs = self.instance_root / "logs"

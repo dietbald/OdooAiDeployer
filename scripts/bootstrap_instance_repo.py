@@ -158,7 +158,11 @@ Next steps (manual):
 
      https://github.com/{args.owner}/{args.repo}/settings/environments
 
-3. Author your first changeset under changesets/, push to an ai/* branch, and watch validate.yml run.
+3. Capture the production baseline before authoring any changeset:
+
+     gh workflow run export-baseline.yml --repo {args.owner}/{args.repo} -f env=production
+
+4. Author your first changeset under changesets/, push to an ai/* branch, and watch validate.yml run.
 """)
     return 0
 
