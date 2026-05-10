@@ -35,17 +35,28 @@ jobs:
         run: |
           set -e
           if [ -n "${{ github.event.inputs.changeset }}" ]; then
-            echo "changesets=${{ github.event.inputs.changeset }}" >> "$GITHUB_OUTPUT"
+            changed="${{ github.event.inputs.changeset }}"
           else
             before="${{ github.event.before }}"
             if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
-              changed=""
+              # New branch — diff against main to find changesets added on this branch
+              git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
+              if git rev-parse origin/main >/dev/null 2>&1; then
+                changed=$(git diff --name-only origin/main...HEAD -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+              else
+                changed=$(ls -1 changesets 2>/dev/null | grep -v '^\.' || true)
+              fi
             else
               changed=$(git diff --name-only "$before...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
             fi
-            echo "changesets<<EOF" >> "$GITHUB_OUTPUT"
-            echo "$changed" >> "$GITHUB_OUTPUT"
-            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+          echo "changesets<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$changed" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          if [ -z "$changed" ]; then
+            echo "::warning::No changesets detected for this push."
+          else
+            echo "Will deploy:"; echo "$changed"
           fi
 
       - name: Validate before deploy
