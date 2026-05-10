@@ -134,8 +134,8 @@ jobs:
             echo "Nothing to commit."
           else
             # CHANGESETS already validated against safe regex above; passing
-            # through bash variable expansion (not direct ${{ }} interpolation)
-            # avoids YAML/shell injection.
+            # through bash variable expansion (not direct GitHub-Actions
+            # template interpolation) avoids YAML/shell injection.
             cs_summary=$(echo "$CHANGESETS" | tr '\n' ' ' | sed 's/ $//')
             git commit -m "deploy: dev/$cs_summary"
             git push origin "HEAD:${{ github.ref_name }}"
