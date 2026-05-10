@@ -5,17 +5,52 @@ from .. import die
 from ..odoo_client import call
 
 
+def _normalize_target(v):
+    """Normalize a write-side value to its read-side equivalent.
+
+    m2m / o2m commands like `[(6, 0, [ids])]` (set-to-exactly-these) become
+    a sorted list of ids — same shape Odoo returns on `read()`.
+    """
+    if isinstance(v, list) and v and isinstance(v[0], (list, tuple)) \
+            and len(v[0]) == 3 and v[0][0] == 6:
+        return sorted(v[0][2])
+    return v
+
+
+def _normalize_current(cur):
+    """Normalize a read-side value to be comparable with a normalized target.
+
+    Disambiguates m2o (`[id, "Display Name"]`, second element is str) from
+    a 2-id m2m (`[id, id]`, second element is int) by inspecting the type of
+    the second element — both are 2-element lists otherwise.
+    """
+    if isinstance(cur, list):
+        # m2o read: [id, name_str]
+        if len(cur) == 2 and isinstance(cur[1], str) \
+                and isinstance(cur[0], int):
+            return cur[0]
+        # m2m / o2m read: [id, id, ...]
+        if cur and all(isinstance(x, int) for x in cur):
+            return sorted(cur)
+        # Empty list — m2m with no records, returns as-is
+        if not cur:
+            return cur
+    return cur
+
+
 def values_match(current: dict, target: dict) -> bool:
     """Compare current Odoo record values to a target dict.
 
-    Many2one fields come back from Odoo as `[id, name]` tuples — we
-    compare just the id.
+    Handles many2one (`[id, name]` → id), many2many command tuples
+    (`[(6, 0, [ids])]` → sorted ids vs read-back `[ids]`), and falls back
+    to plain equality for scalars. Translatable fields and HTML fields
+    that Odoo round-trip-normalizes are still false-negative-prone — those
+    are addressed at the handler level (see `update_view._canonicalize_xml`).
     """
     for k, v in target.items():
-        cur = current.get(k)
-        if isinstance(cur, list) and len(cur) == 2:
-            cur = cur[0]
-        if cur != v:
+        cur = _normalize_current(current.get(k))
+        v_norm = _normalize_target(v)
+        if cur != v_norm:
             return False
     return True
 

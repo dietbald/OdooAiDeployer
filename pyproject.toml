@@ -12,6 +12,7 @@ license = {text = "MIT"}
 authors = [{name = "TJ"}]
 dependencies = [
     "PyYAML>=6.0",
+    "lxml>=4.9",
 ]
 
 [project.scripts]
