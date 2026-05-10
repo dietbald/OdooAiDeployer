@@ -56,18 +56,33 @@ jobs:
             echo "Will validate:"; echo "$changed"
           fi
 
-      - name: Restricted-folder guard (ai/* branches)
-        if: startsWith(github.ref, 'refs/heads/ai/')
+      - name: Restricted-folder guard (ai/* branches and ai/* PRs)
+        if: startsWith(github.ref, 'refs/heads/ai/') || startsWith(github.head_ref, 'ai/')
         run: |
           set -e
-          changed_files=$(git diff --name-only "origin/main...HEAD" 2>/dev/null || git diff --name-only HEAD~1...HEAD)
-          forbidden_pattern='^(deployer/|\.github/workflows/|config/(?!blocklist/)|audits/(staging|production)/|rollback_snapshots/(staging|production)/)'
-          violations=$(echo "$changed_files" | grep -E "$forbidden_pattern" || true)
+          # Pick the right diff base: PR head→base, otherwise origin/main.
+          if [ -n "${{ github.base_ref }}" ]; then
+            base="origin/${{ github.base_ref }}"
+            git fetch origin "${{ github.base_ref }}" --depth=1 2>/dev/null || true
+          else
+            base="origin/main"
+            git fetch origin main --depth=1 2>/dev/null || true
+          fi
+          if ! git rev-parse "$base" >/dev/null 2>&1; then
+            echo "::error::Restricted-folder guard cannot resolve diff base '$base' — refusing to pass guard by default."
+            exit 1
+          fi
+          changed_files=$(git diff --name-only "$base...HEAD" || true)
+          # Two-step check: forbidden minus allowlist. Avoids PCRE lookahead
+          # which grep -E (POSIX ERE) does not support and silently no-ops on.
+          forbidden=$(echo "$changed_files" | grep -E '^(deployer/|\.github/workflows/|config/|audits/(staging|production)/|rollback_snapshots/(staging|production)/)' || true)
+          violations=$(echo "$forbidden" | grep -vE '^(config/blocklist/|$)' || true)
           if [ -n "$violations" ]; then
-            echo "::error::ai/* branch modified restricted paths:"
+            echo "::error::ai/* branch modified restricted paths (deployer/, .github/workflows/, config/ except blocklist/, staging+production audits, staging+production rollback_snapshots):"
             echo "$violations" | sed 's/^/::error::  /'
             exit 1
           fi
+          echo "Restricted-folder guard: OK ($(echo "$changed_files" | wc -l) files changed, none restricted)."
 
       - name: Validate each changeset
         if: steps.detect.outputs.changesets != ''
