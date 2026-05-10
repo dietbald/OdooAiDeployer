@@ -37,6 +37,10 @@ jobs:
         id: detect
         run: |
           set -e
+          # --diff-filter=AMR: Added / Modified / Renamed only — never Deleted.
+          # Without this, a revert that removes a changeset triggers a deploy
+          # against the now-missing folder and CI goes red for what's actually
+          # a clean removal.
           if [ -n "${{ github.event.inputs.changeset }}" ]; then
             changed="${{ github.event.inputs.changeset }}"
           else
@@ -45,12 +49,12 @@ jobs:
               # New branch — diff against main to find changesets added on this branch
               git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
               if git rev-parse origin/main >/dev/null 2>&1; then
-                changed=$(git diff --name-only origin/main...HEAD -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+                changed=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
               else
                 changed=$(ls -1 changesets 2>/dev/null | grep -v '^\.' || true)
               fi
             else
-              changed=$(git diff --name-only "$before...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+              changed=$(git diff --name-only --diff-filter=AMR "$before...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
             fi
           fi
           echo "changesets<<EOF" >> "$GITHUB_OUTPUT"
