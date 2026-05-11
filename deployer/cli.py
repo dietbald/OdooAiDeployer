@@ -25,6 +25,7 @@ from .deploy import cmd_deploy
 from .export_baseline import cmd_export_baseline
 from .hash_changeset import changeset_sha256
 from .preflight import cmd_preflight
+from .restricted_paths import cmd_guard_paths
 from .rollback import cmd_rollback
 from .validate_changeset import cmd_validate
 from .verify import cmd_verify
@@ -92,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
                        help="Snapshot the customization layer into baseline/<env>/")
     s.add_argument("--env", choices=VALID_ENVS, default="production")
 
+    s = sub.add_parser("guard-paths",
+                       help="ai/* branch guard: refuse if HEAD modifies restricted paths")
+    s.add_argument("--base", required=True,
+                   help="git ref to diff HEAD against (e.g. origin/main)")
+
     args = p.parse_args(argv)
 
     repo_root = Path(args.repo).resolve()
@@ -116,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_status(paths, args.changeset)
     if args.cmd == "export-baseline":
         return cmd_export_baseline(paths, args.env)
+    if args.cmd == "guard-paths":
+        return cmd_guard_paths(repo_root, args.base)
     die(f"unknown command: {args.cmd}")
 
 

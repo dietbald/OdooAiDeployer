@@ -1,5 +1,7 @@
 name: deploy-dev
 
+# Thin shim — all logic lives in OdooAiDeployer/.github/workflows/_deploy-dev.yml.
+
 on:
   push:
     branches:
@@ -18,141 +20,7 @@ permissions:
 
 jobs:
   deploy-dev:
-    runs-on: ubuntu-latest
-    environment: dev
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install OdooAiDeployer
-        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
-
-      - name: Determine changesets to deploy
-        id: detect
-        run: |
-          set -e
-          # --diff-filter=AMR: Added / Modified / Renamed only — never Deleted.
-          # Without this, a revert that removes a changeset triggers a deploy
-          # against the now-missing folder and CI goes red for what's actually
-          # a clean removal.
-          if [ -n "${{ github.event.inputs.changeset }}" ]; then
-            changed="${{ github.event.inputs.changeset }}"
-          else
-            before="${{ github.event.before }}"
-            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
-              # New branch — diff against main to find changesets added on this branch
-              git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
-              if git rev-parse origin/main >/dev/null 2>&1; then
-                changed=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
-              else
-                changed=$(ls -1 changesets 2>/dev/null | grep -v '^\.' || true)
-              fi
-            else
-              changed=$(git diff --name-only --diff-filter=AMR "$before...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
-            fi
-          fi
-          echo "changesets<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$changed" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-          if [ -z "$changed" ]; then
-            echo "::warning::No changesets detected for this push."
-          else
-            echo "Will deploy:"; echo "$changed"
-          fi
-
-      - name: Validate changeset names (shell-safety)
-        if: steps.detect.outputs.changesets != ''
-        env:
-          CHANGESETS: ${{ steps.detect.outputs.changesets }}
-        run: |
-          set -e
-          while IFS= read -r cs; do
-            [ -z "$cs" ] && continue
-            if ! [[ "$cs" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
-              echo "::error::Refusing changeset name '$cs' — must match ^[A-Za-z0-9][A-Za-z0-9_.-]*\$. Folder names with spaces, quotes, or shell metacharacters are blocked to prevent command injection in commit messages."
-              exit 1
-            fi
-          done <<< "$CHANGESETS"
-
-      - name: Validate before deploy
-        if: steps.detect.outputs.changesets != ''
-        env:
-          CHANGESETS: ${{ steps.detect.outputs.changesets }}
-        run: |
-          set -e
-          while IFS= read -r cs; do
-            [ -z "$cs" ] && continue
-            odoo-deploy --repo . validate --changeset "$cs"
-          done <<< "$CHANGESETS"
-
-      - name: Deploy each changeset to dev
-        if: steps.detect.outputs.changesets != ''
-        env:
-          ODOO_URL: ${{ secrets.ODOO_URL }}
-          ODOO_DB: ${{ secrets.ODOO_DB }}
-          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
-          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
-          ODOO_ENV_NAME: dev
-          CHANGESETS: ${{ steps.detect.outputs.changesets }}
-        run: |
-          set -e
-          while IFS= read -r cs; do
-            [ -z "$cs" ] && continue
-            echo "::group::deploy dev $cs"
-            odoo-deploy --repo . deploy --env dev --changeset "$cs" --force --no-commit
-            echo "::endgroup::"
-          done <<< "$CHANGESETS"
-
-      - name: Verify post-deploy
-        if: steps.detect.outputs.changesets != ''
-        env:
-          ODOO_URL: ${{ secrets.ODOO_URL }}
-          ODOO_DB: ${{ secrets.ODOO_DB }}
-          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
-          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
-          ODOO_ENV_NAME: dev
-          CHANGESETS: ${{ steps.detect.outputs.changesets }}
-        run: |
-          set -e
-          while IFS= read -r cs; do
-            [ -z "$cs" ] && continue
-            odoo-deploy --repo . verify --env dev --changeset "$cs"
-          done <<< "$CHANGESETS"
-
-      - name: Commit audit + rollback snapshot
-        if: steps.detect.outputs.changesets != ''
-        env:
-          CHANGESETS: ${{ steps.detect.outputs.changesets }}
-        run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add audits/dev/ rollback_snapshots/dev/ reports/ || true
-          if git diff --cached --quiet; then
-            echo "Nothing to commit."
-          else
-            # CHANGESETS already validated against safe regex above; passing
-            # through bash variable expansion (not direct GitHub-Actions
-            # template interpolation) avoids YAML/shell injection.
-            cs_summary=$(echo "$CHANGESETS" | tr '\n' ' ' | sed 's/ $//')
-            git commit -m "deploy: dev/$cs_summary"
-            git push origin "HEAD:${{ github.ref_name }}"
-          fi
-
-      - name: Upload deploy artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dev-deploy-${{ github.run_id }}
-          path: |
-            audits/dev/
-            rollback_snapshots/dev/
-            reports/
-            logs/
-          if-no-files-found: ignore
+    uses: dietbald/OdooAiDeployer/.github/workflows/_deploy-dev.yml@main
+    with:
+      changeset: ${{ github.event.inputs.changeset || '' }}
+    secrets: inherit

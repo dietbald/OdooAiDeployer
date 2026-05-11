@@ -1,5 +1,7 @@
 name: export-baseline
 
+# Thin shim — all logic lives in OdooAiDeployer/.github/workflows/_export-baseline.yml.
+
 on:
   workflow_dispatch:
     inputs:
@@ -15,55 +17,7 @@ permissions:
 
 jobs:
   export-baseline:
-    runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.env }}  # uses env protection — production requires approval
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install OdooAiDeployer
-        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
-
-      - name: Validate env input (shell-safety)
-        env:
-          ENV_NAME: ${{ github.event.inputs.env }}
-        run: |
-          set -e
-          case "$ENV_NAME" in
-            dev|staging|production) ;;
-            *) echo "::error::Invalid env '$ENV_NAME'"; exit 1 ;;
-          esac
-
-      - name: Export baseline
-        env:
-          ODOO_URL: ${{ secrets.ODOO_URL }}
-          ODOO_DB: ${{ secrets.ODOO_DB }}
-          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
-          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
-          ODOO_ENV_NAME: ${{ github.event.inputs.env }}
-          ENV_NAME: ${{ github.event.inputs.env }}
-        run: |
-          odoo-deploy --repo . export-baseline --env "$ENV_NAME"
-
-      - name: Commit baseline
-        env:
-          ENV_NAME: ${{ github.event.inputs.env }}
-        run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add baseline/ || true
-          if git diff --cached --quiet; then
-            echo "Baseline unchanged."
-          else
-            ts=$(date -u +%Y-%m-%dT%H:%MZ)
-            git commit -m "baseline: $ENV_NAME export $ts"
-            git push origin "HEAD:${{ github.ref_name }}"
-          fi
+    uses: dietbald/OdooAiDeployer/.github/workflows/_export-baseline.yml@main
+    with:
+      environment: ${{ github.event.inputs.env }}
+    secrets: inherit

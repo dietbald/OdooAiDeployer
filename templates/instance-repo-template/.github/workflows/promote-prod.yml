@@ -1,5 +1,8 @@
 name: promote-prod
 
+# Thin shim — all logic lives in OdooAiDeployer/.github/workflows/_promote.yml.
+# The reusable workflow runs the dev+staging audit gate when environment=production.
+
 on:
   workflow_dispatch:
     inputs:
@@ -11,80 +14,9 @@ permissions:
   contents: write
 
 jobs:
-  promote-prod:
-    runs-on: ubuntu-latest
-    environment: production  # Required reviewer enforced by GitHub env protection
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install OdooAiDeployer
-        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
-
-      - name: Validate changeset name (shell-safety)
-        env:
-          CS: ${{ github.event.inputs.changeset }}
-        run: |
-          set -e
-          if ! [[ "$CS" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
-            echo "::error::Refusing changeset name '$CS' — must match ^[A-Za-z0-9][A-Za-z0-9_.-]*\$."
-            exit 1
-          fi
-
-      - name: Verify dev + staging audits exist with matching sha
-        env:
-          CS: ${{ github.event.inputs.changeset }}
-        run: |
-          set -e
-          for env in dev staging; do
-            if [ ! -f "audits/$env/$CS.json" ]; then
-              echo "::error::Missing audits/$env/$CS.json — must promote through $env first."
-              exit 1
-            fi
-          done
-          # Status command surfaces sha mismatches across envs
-          odoo-deploy --repo . status --changeset "$CS"
-
-      - name: Deploy to production
-        env:
-          ODOO_URL: ${{ secrets.ODOO_URL }}
-          ODOO_DB: ${{ secrets.ODOO_DB }}
-          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
-          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
-          ODOO_ENV_NAME: production
-          CS: ${{ github.event.inputs.changeset }}
-        run: |
-          odoo-deploy --repo . deploy --env production --changeset "$CS" --no-commit
-
-      - name: Verify post-deploy
-        env:
-          ODOO_URL: ${{ secrets.ODOO_URL }}
-          ODOO_DB: ${{ secrets.ODOO_DB }}
-          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
-          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
-          ODOO_ENV_NAME: production
-          CS: ${{ github.event.inputs.changeset }}
-        run: |
-          odoo-deploy --repo . verify --env production --changeset "$CS"
-
-      - name: Commit audit + rollback snapshot
-        env:
-          CS: ${{ github.event.inputs.changeset }}
-        run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add audits/production/ rollback_snapshots/production/ || true
-          if git diff --cached --quiet; then
-            echo "Nothing to commit."
-          else
-            git commit -m "deploy: production/$CS"
-            git push origin "HEAD:${{ github.ref_name }}"
-          fi
+  promote:
+    uses: dietbald/OdooAiDeployer/.github/workflows/_promote.yml@main
+    with:
+      environment: production
+      changeset: ${{ github.event.inputs.changeset }}
+    secrets: inherit

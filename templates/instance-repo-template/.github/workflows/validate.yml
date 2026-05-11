@@ -1,5 +1,9 @@
 name: validate
 
+# Thin shim — all logic lives in OdooAiDeployer/.github/workflows/_validate.yml.
+# Per-instance customizations should be additions in this file (extra steps,
+# notifications, etc.), not edits to the called workflow.
+
 on:
   push:
     branches:
@@ -10,103 +14,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install OdooAiDeployer
-        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
-
-      - name: Detect changed changesets
-        id: detect
-        run: |
-          set -e
-          # --diff-filter=AMR: Added / Modified / Renamed only — never Deleted.
-          # Without this, a revert that removes a changeset triggers a validate
-          # against the now-missing folder and CI goes red for what's actually
-          # a clean removal.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="origin/${{ github.base_ref }}"
-            git fetch origin "${{ github.base_ref }}"
-            changed=$(git diff --name-only --diff-filter=AMR "$base...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
-          else
-            before="${{ github.event.before }}"
-            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
-              # New branch — diff against main to find changesets added on this branch
-              git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
-              if git rev-parse origin/main >/dev/null 2>&1; then
-                changed=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
-              else
-                changed=$(ls -1 changesets 2>/dev/null | grep -v '^\.' || true)
-              fi
-            else
-              changed=$(git diff --name-only --diff-filter=AMR "$before...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
-            fi
-          fi
-          echo "changesets<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$changed" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-          if [ -z "$changed" ]; then
-            echo "No changesets touched in this push/PR."
-          else
-            echo "Will validate:"; echo "$changed"
-          fi
-
-      - name: Restricted-folder guard (ai/* branches and ai/* PRs)
-        if: startsWith(github.ref, 'refs/heads/ai/') || startsWith(github.head_ref, 'ai/')
-        run: |
-          set -e
-          # Pick the right diff base: PR head→base, otherwise origin/main.
-          if [ -n "${{ github.base_ref }}" ]; then
-            base="origin/${{ github.base_ref }}"
-            git fetch origin "${{ github.base_ref }}" --depth=1 2>/dev/null || true
-          else
-            base="origin/main"
-            git fetch origin main --depth=1 2>/dev/null || true
-          fi
-          if ! git rev-parse "$base" >/dev/null 2>&1; then
-            echo "::error::Restricted-folder guard cannot resolve diff base '$base' — refusing to pass guard by default."
-            exit 1
-          fi
-          changed_files=$(git diff --name-only "$base...HEAD" || true)
-          # Two-step check: forbidden minus allowlist. Avoids PCRE lookahead
-          # which grep -E (POSIX ERE) does not support and silently no-ops on.
-          forbidden=$(echo "$changed_files" | grep -E '^(deployer/|\.github/workflows/|config/|audits/(staging|production)/|rollback_snapshots/(staging|production)/|baseline/prod/)' || true)
-          violations=$(echo "$forbidden" | grep -vE '^(config/blocklist/|$)' || true)
-          if [ -n "$violations" ]; then
-            echo "::error::ai/* branch modified restricted paths (deployer/, .github/workflows/, config/ except blocklist/, staging+production audits, staging+production rollback_snapshots):"
-            echo "$violations" | sed 's/^/::error::  /'
-            exit 1
-          fi
-          echo "Restricted-folder guard: OK ($(echo "$changed_files" | wc -l) files changed, none restricted)."
-
-      - name: Validate each changeset
-        if: steps.detect.outputs.changesets != ''
-        run: |
-          set -e
-          fail=0
-          while IFS= read -r cs; do
-            [ -z "$cs" ] && continue
-            echo "::group::validate $cs"
-            odoo-deploy --repo . validate --changeset "$cs" || fail=1
-            echo "::endgroup::"
-          done <<< "${{ steps.detect.outputs.changesets }}"
-          exit $fail
-
-      - name: Upload validation reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: validation-reports
-          path: |
-            reports/validation/
-            reports/ai_feedback/
-          if-no-files-found: ignore
+    uses: dietbald/OdooAiDeployer/.github/workflows/_validate.yml@main

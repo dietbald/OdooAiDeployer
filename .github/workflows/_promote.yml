@@ -1,0 +1,112 @@
+name: _promote (reusable)
+
+# Reusable promotion workflow. Called by per-instance `promote-staging.yml`
+# and `promote-prod.yml`, each passing the right `environment` input. The
+# `environment:` declaration on the job inherits the caller repo's
+# environment-protection rules (required reviewers, secrets, wait timer).
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+        description: "staging or production"
+      changeset:
+        type: string
+        required: true
+        description: "Changeset id to promote"
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install OdooAiDeployer
+        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
+
+      - name: Validate inputs (shell-safety)
+        env:
+          CS: ${{ inputs.changeset }}
+          ENV_NAME: ${{ inputs.environment }}
+        run: |
+          set -e
+          if ! [[ "$CS" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+            echo "::error::Refusing changeset name '$CS' — must match ^[A-Za-z0-9][A-Za-z0-9_.-]*\$."
+            exit 1
+          fi
+          case "$ENV_NAME" in
+            staging|production) ;;
+            *) echo "::error::_promote.yml only supports staging/production; got '$ENV_NAME'"; exit 1 ;;
+          esac
+
+      - name: Promotion gate (production only — verify dev + staging audits)
+        if: inputs.environment == 'production'
+        env:
+          CS: ${{ inputs.changeset }}
+        run: |
+          set -e
+          for env in dev staging; do
+            if [ ! -f "audits/$env/$CS.json" ]; then
+              echo "::error::Missing audits/$env/$CS.json — must promote through $env first."
+              exit 1
+            fi
+          done
+          # status surfaces sha mismatches across envs
+          odoo-deploy --repo . status --changeset "$CS"
+
+      - name: Validate before promote
+        env:
+          CS: ${{ inputs.changeset }}
+        run: odoo-deploy --repo . validate --changeset "$CS"
+
+      - name: Deploy to ${{ inputs.environment }}
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
+          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          ODOO_ENV_NAME: ${{ inputs.environment }}
+          CS: ${{ inputs.changeset }}
+          ENV_NAME: ${{ inputs.environment }}
+        run: odoo-deploy --repo . deploy --env "$ENV_NAME" --changeset "$CS" --no-commit
+
+      - name: Verify post-deploy
+        env:
+          ODOO_URL: ${{ secrets.ODOO_URL }}
+          ODOO_DB: ${{ secrets.ODOO_DB }}
+          ODOO_USERNAME: ${{ secrets.ODOO_USERNAME }}
+          ODOO_PASSWORD: ${{ secrets.ODOO_PASSWORD }}
+          ODOO_ENV_NAME: ${{ inputs.environment }}
+          CS: ${{ inputs.changeset }}
+          ENV_NAME: ${{ inputs.environment }}
+        run: odoo-deploy --repo . verify --env "$ENV_NAME" --changeset "$CS"
+
+      - name: Commit audit + rollback snapshot
+        env:
+          CS: ${{ inputs.changeset }}
+          ENV_NAME: ${{ inputs.environment }}
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "audits/${ENV_NAME}/" "rollback_snapshots/${ENV_NAME}/" || true
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "deploy: ${ENV_NAME}/${CS}"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi

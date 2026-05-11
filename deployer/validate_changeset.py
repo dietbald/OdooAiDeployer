@@ -26,7 +26,7 @@ from pathlib import Path
 
 import yaml
 
-from . import Paths, die, now_iso
+from . import Paths, SUPPORTED_SCHEMA_VERSIONS, die, now_iso
 from .handlers import DISPATCH
 from .hash_changeset import changeset_sha256
 
@@ -168,6 +168,18 @@ def cmd_validate(paths: Paths, changeset_id: str) -> int:
     if manifest.get("id") != changeset_id:
         issues.append({"file": "manifest.yaml", "line": 0,
                        "msg": f"manifest.id ({manifest.get('id')!r}) must equal folder name ({changeset_id!r})"})
+
+    sv = manifest.get("schema_version")
+    if sv is None:
+        issues.append({"file": "manifest.yaml", "line": 0,
+                       "msg": f"missing required field 'schema_version'. "
+                              f"Add `schema_version: {SUPPORTED_SCHEMA_VERSIONS[-1]}` "
+                              f"at the top of the manifest."})
+    elif sv not in SUPPORTED_SCHEMA_VERSIONS:
+        issues.append({"file": "manifest.yaml", "line": 0,
+                       "msg": f"unsupported schema_version: {sv!r}. "
+                              f"This deployer supports {list(SUPPORTED_SCHEMA_VERSIONS)}. "
+                              f"Either upgrade the deployer or downgrade the manifest."})
 
     ops = manifest.get("operations") or []
     if not isinstance(ops, list) or not ops:

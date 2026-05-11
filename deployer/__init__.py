@@ -26,6 +26,14 @@ from pathlib import Path
 
 __version__ = "0.1.0"
 
+# Manifest format version. Bumped only when an existing manifest field
+# changes shape or required-ness in a way old changesets won't survive.
+# Validator and deployer both refuse manifests whose schema_version is not
+# in this set; missing field is treated as a hard error so stale manifests
+# fail loudly instead of silently producing the wrong result.
+SUPPORTED_SCHEMA_VERSIONS = (1,)
+CURRENT_SCHEMA_VERSION = 1
+
 # Three environments. Names are final.
 #   dev         — AI iteration sandbox; auto-deploys allowed; --force allowed
 #   staging     — fresh-from-prod validation; manual deploy; gated on dev audit

@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from pathlib import Path
 
-from .. import die
+from .. import Paths, die
+from ..audit import backup_record
 from ..odoo_client import call
 
 
@@ -63,13 +66,42 @@ def values_match(current: dict, target: dict) -> bool:
     return True
 
 
+def _read_for_backup(ctx: dict, model: str, rec_id: int, fields: list[str]) -> dict:
+    """Read current values for the keys we're about to write, to snapshot
+    them. m2o/m2m readbacks are normalized into write-side shapes so the
+    snapshot can be passed straight back into `write()` on rollback."""
+    raw = call(ctx, model, "read", [[rec_id]], {"fields": fields})[0]
+    out: dict = {}
+    for k in fields:
+        v = raw.get(k)
+        if isinstance(v, list) and len(v) == 2 and isinstance(v[1], str) \
+                and isinstance(v[0], int):
+            # m2o read: [id, name] → just id (write-side accepts int)
+            out[k] = v[0]
+        elif isinstance(v, list) and v and all(isinstance(x, int) for x in v):
+            # m2m read: [id, id, ...] → set-exactly command
+            out[k] = [(6, 0, list(v))]
+        elif isinstance(v, list) and not v:
+            # Empty m2m → set-to-empty command
+            out[k] = [(6, 0, [])]
+        else:
+            out[k] = v
+    return out
+
+
 def upsert_by_xml_id(ctx: dict, model: str, xml_id: str,
-                     values: dict) -> tuple[int, str]:
+                     values: dict, *,
+                     backup_ctx: tuple | None = None) -> tuple[int, str, Path | None]:
     """Create or update a record keyed by xml_id.
 
-    Returns (record_id, action) where action is 'created'|'updated'|'skipped'.
-    Idempotency: if the record exists and current values match `values` on
-    the keys provided, returns ('skipped').
+    Returns (record_id, action, backup_path). action ∈ {created, updated, skipped}.
+    backup_path is set only when action == 'updated' and a backup_ctx was passed.
+
+    `backup_ctx` is `(paths, env_name, changeset_id, op_index)` — passed by
+    handlers that want a rollback snapshot of the prior record state. The
+    snapshot is JSON of the keys we're about to overwrite, in write-side
+    shape (m2m become `[(6, 0, [ids])]` so rollback can pass them straight
+    back into `write()`).
     """
     if "." not in xml_id:
         die(f"xml_id must be 'module.name' form, got: {xml_id}")
@@ -83,15 +115,23 @@ def upsert_by_xml_id(ctx: dict, model: str, xml_id: str,
         current = call(ctx, model, "read", [[rec_id]],
                        {"fields": list(values.keys())})
         if current and values_match(current[0], values):
-            return rec_id, "skipped"
+            return rec_id, "skipped", None
+        backup_path: Path | None = None
+        if backup_ctx is not None:
+            paths, env_name, changeset_id, op_index = backup_ctx
+            prior = _read_for_backup(ctx, model, rec_id, list(values.keys()))
+            backup_path = backup_record(
+                paths, env_name, changeset_id, op_index,
+                model, rec_id, prior, ext="json",
+            )
         call(ctx, model, "write", [[rec_id], values])
-        return rec_id, "updated"
+        return rec_id, "updated", backup_path
     rec_id = call(ctx, model, "create", [values])
     call(ctx, "ir.model.data", "create", [{
         "module": module, "name": name, "model": model, "res_id": rec_id,
         "noupdate": False,
     }])
-    return rec_id, "created"
+    return rec_id, "created", None
 
 
 def resolve_xml_id_to_res_id(ctx: dict, xml_id: str,
@@ -104,3 +144,79 @@ def resolve_xml_id_to_res_id(ctx: dict, xml_id: str,
     recs = call(ctx, "ir.model.data", "search_read", [domain],
                 {"fields": ["res_id"], "limit": 1})
     return recs[0]["res_id"] if recs else None
+
+
+def _parse_target(target: str) -> tuple[str, int] | None:
+    """Parse 'model.name:rec_id' into (model, rec_id). None if unparseable
+    (e.g. 'xml_id:foo.bar' from a dry-run record — nothing to roll back)."""
+    if not target or ":" not in target or target.startswith("xml_id:"):
+        return None
+    model, _, rec_id_s = target.partition(":")
+    try:
+        return model, int(rec_id_s)
+    except ValueError:
+        return None
+
+
+def _delete_xml_id(ctx: dict, model: str, rec_id: int) -> None:
+    """Remove the ir.model.data row for a (model, rec_id). Odoo's unlink
+    cascades this for most models, but defensive cleanup keeps the xml_id
+    re-usable for re-creation in case the cascade ever changes."""
+    rows = call(ctx, "ir.model.data", "search",
+                [[("model", "=", model), ("res_id", "=", rec_id)]])
+    if rows:
+        call(ctx, "ir.model.data", "unlink", [rows])
+
+
+def rollback_upsert(ctx: dict, op_record: dict, *,
+                    paths: Paths, dry_run: bool = False) -> dict:
+    """Generic rollback for handlers that use upsert_by_xml_id.
+
+    Status semantics:
+      created  → unlink the record (and its ir.model.data row)
+      updated  → restore prior values from JSON snapshot
+      skipped  → no-op
+      anything else (e.g. would-upsert from dry-run audits) → manual-required
+    """
+    target = op_record.get("target", "")
+    parsed = _parse_target(target)
+    if not parsed:
+        return {"target": target, "status": "skipped",
+                "reason": "no concrete target (dry-run or pre-snapshot audit)"}
+    model, rec_id = parsed
+
+    status = op_record.get("status")
+
+    if status == "skipped":
+        return {"target": target, "status": "skipped",
+                "reason": "op was a no-op; nothing to undo"}
+
+    if status == "created":
+        if dry_run:
+            return {"target": target, "status": "would-unlink"}
+        call(ctx, model, "unlink", [[rec_id]])
+        _delete_xml_id(ctx, model, rec_id)
+        return {"target": target, "status": "unlinked"}
+
+    if status == "updated":
+        snap_rel = op_record.get("rollback_snapshot")
+        if not snap_rel:
+            return {"target": target, "status": "manual-required",
+                    "reason": "op recorded status=updated but no snapshot path"}
+        snap_path = paths.instance_root / snap_rel
+        if not snap_path.is_file():
+            return {"target": target, "status": "manual-required",
+                    "reason": f"snapshot file missing: {snap_rel}"}
+        try:
+            prior = json.loads(snap_path.read_text())
+        except json.JSONDecodeError as exc:
+            return {"target": target, "status": "manual-required",
+                    "reason": f"snapshot is not JSON: {exc}"}
+        if dry_run:
+            return {"target": target, "status": "would-restore",
+                    "from": snap_rel, "fields": list(prior.keys())}
+        call(ctx, model, "write", [[rec_id], prior])
+        return {"target": target, "status": "restored", "from": snap_rel}
+
+    return {"target": target, "status": "manual-required",
+            "reason": f"unhandled status {status!r}"}

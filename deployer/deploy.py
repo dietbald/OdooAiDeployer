@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from . import Paths, VALID_ENVS, die, now_iso
+from . import Paths, SUPPORTED_SCHEMA_VERSIONS, VALID_ENVS, die, now_iso
 from .audit import (
     audit_read, audit_write, backup_record, git_commit, git_head_sha,
     log_op, registry_lookup, registry_record,
@@ -37,6 +37,13 @@ def load_manifest(paths: Paths, changeset_id: str) -> tuple[Path, dict]:
         die(f"manifest.yaml parse error: {exc}")
     if manifest.get("id") != changeset_id:
         die(f"manifest.id ({manifest.get('id')!r}) must equal folder name ({changeset_id!r})")
+    sv = manifest.get("schema_version")
+    if sv is None:
+        die(f"manifest.yaml missing required field 'schema_version'. "
+            f"Add `schema_version: {SUPPORTED_SCHEMA_VERSIONS[-1]}` at the top.")
+    if sv not in SUPPORTED_SCHEMA_VERSIONS:
+        die(f"manifest.schema_version={sv!r} not supported by this deployer "
+            f"(supported: {list(SUPPORTED_SCHEMA_VERSIONS)}).")
     if not isinstance(manifest.get("operations"), list) or not manifest["operations"]:
         die("manifest.operations must be a non-empty list")
     return cdir, manifest

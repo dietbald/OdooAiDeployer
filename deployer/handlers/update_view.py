@@ -147,6 +147,39 @@ def verify(ctx: dict, op: dict, *, paths: Paths, changeset_id: str) -> dict:
             "matches": matches}
 
 
+def rollback(ctx, op_record, *, paths: Paths, env_name: str, dry_run: bool = False):
+    """Restore arch_db from the XML snapshot taken before the write."""
+    target = op_record.get("target", "")
+    if not target or ":" not in target or target.startswith("xml_id:"):
+        return {"type": "update_view", "target": target, "status": "skipped",
+                "reason": "no concrete target"}
+    model, _, rec_id_s = target.partition(":")
+    rec_id = int(rec_id_s)
+
+    if op_record.get("status") == "skipped":
+        return {"type": "update_view", "target": target, "status": "skipped",
+                "reason": "op was a no-op; nothing to undo"}
+
+    snap_rel = op_record.get("rollback_snapshot")
+    if not snap_rel:
+        return {"type": "update_view", "target": target,
+                "status": "manual-required", "reason": "no snapshot recorded"}
+    snap_path = paths.instance_root / snap_rel
+    if not snap_path.is_file():
+        return {"type": "update_view", "target": target,
+                "status": "manual-required",
+                "reason": f"snapshot file missing: {snap_rel}"}
+    arch = snap_path.read_text()
+
+    if dry_run:
+        return {"type": "update_view", "target": target,
+                "status": "would-restore", "from": snap_rel}
+
+    call(ctx, model, "write", [[rec_id], {"arch_db": arch}])
+    return {"type": "update_view", "target": target,
+            "status": "restored", "from": snap_rel}
+
+
 def read_current_canonical_sha(ctx: dict, op: dict) -> str:
     """Return sha256 of the canonical form of the target view's current arch_db.
 

@@ -153,14 +153,16 @@ Production deployment is never automatic.
 ## 6. GitHub Actions Workflows
 
 ```
-.github/workflows/
-├── validate.yml
-├── deploy-dev.yml
-├── promote-staging.yml
-├── promote-prod.yml
-├── rollback.yml
-└── export-baseline.yml
+.github/workflows/                     # per-instance shims (~15 lines each)
+├── validate.yml          → uses dietbald/OdooAiDeployer/.github/workflows/_validate.yml
+├── deploy-dev.yml        → uses _deploy-dev.yml
+├── promote-staging.yml   → uses _promote.yml      (environment: staging)
+├── promote-prod.yml      → uses _promote.yml      (environment: production)
+├── rollback.yml          → uses _rollback.yml
+└── export-baseline.yml   → uses _export-baseline.yml
 ```
+
+All workflow logic lives in **reusable workflows** under `OdooAiDeployer/.github/workflows/_*.yml`. Per-instance shims are small enough to be obviously correct on inspection and cannot drift from the platform — when behaviour needs to change, edit OdooAiDeployer once and every instance picks it up on the next workflow run. Per-environment protection rules (required reviewers, env-scoped secrets) still live in each instance repo and are honoured because the called workflow's `environment:` declaration runs in the caller's context.
 
 ### validate.yml
 

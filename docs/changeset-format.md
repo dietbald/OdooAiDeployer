@@ -16,6 +16,7 @@ The folder name is the changeset id and must equal `manifest.id`.
 
 ```yaml
 id: 043_recruitment_reminder           # must equal folder name
+schema_version: 1                      # required; bumped only on breaking format changes
 description: |
   One-line summary of intent and why.
 author: ai
@@ -74,9 +75,24 @@ Use the Odoo-provided `env`, `record`, `records`, `model`, `log`, `Warning`, `Us
 
 Every handler reads current state before any write:
 - If current matches target → log `skipped`, no backup, no audit churn.
-- If different → write a backup snapshot to `rollback_snapshots/<env>/<id>/`, apply, log `applied`.
+- If different → write a backup snapshot to `rollback_snapshots/<env>/<id>/`, apply, log `applied` (or `created`/`updated` for upsert handlers).
 
 This makes `--force` (dev only) and partial reruns safe.
+
+## Rollback
+
+`odoo-deploy rollback --env <env> --changeset <id>` walks the audit file in reverse and dispatches each op to its handler's `rollback()`:
+
+| Apply status | Rollback effect |
+|---|---|
+| `applied` (update_view, update_record) | Restore prior state from snapshot |
+| `created` | `unlink` the record + remove its `ir.model.data` row |
+| `updated` | Write prior values back from the JSON snapshot |
+| `skipped` | No-op — nothing to undo |
+
+`create_automated_action` is composite: rollback undoes the `base.automation` first (so the `ir.actions.server` is no longer referenced), then the sibling action.
+
+If a handler can't undo cleanly (snapshot missing, FK constraint, etc.), it returns `manual-required` and the rollback CLI exits 2 — the operator gets a clear "this op needs hand-cleanup" signal without the rollback aborting halfway.
 
 ## Hashing
 

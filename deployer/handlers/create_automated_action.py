@@ -25,7 +25,9 @@ from __future__ import annotations
 
 from .. import Paths, die, load_file_text
 from ..odoo_client import call
-from ._common import resolve_xml_id_to_res_id, upsert_by_xml_id, values_match
+from ._common import (
+    resolve_xml_id_to_res_id, rollback_upsert, upsert_by_xml_id, values_match,
+)
 
 
 def _action_xml_id(automation_xml_id: str) -> str:
@@ -82,24 +84,33 @@ def apply(ctx, op, *, paths: Paths, env_name, changeset_id, op_index, dry_run=Fa
 
     # Step 1: sibling ir.actions.server holding the code.
     action_values = _build_action_values(ctx, op, paths, changeset_id, model_id)
-    action_id, action_status = upsert_by_xml_id(
-        ctx, "ir.actions.server", action_xml_id, action_values)
+    action_id, action_status, action_backup = upsert_by_xml_id(
+        ctx, "ir.actions.server", action_xml_id, action_values,
+        backup_ctx=(paths, env_name, changeset_id, op_index),
+    )
 
     # Step 2: base.automation pointing at that action.
     automation_values = _build_automation_values(op, model_id, action_id)
-    auto_id, auto_status = upsert_by_xml_id(
-        ctx, "base.automation", op["xml_id"], automation_values)
+    auto_id, auto_status, auto_backup = upsert_by_xml_id(
+        ctx, "base.automation", op["xml_id"], automation_values,
+        backup_ctx=(paths, env_name, changeset_id, op_index),
+    )
 
-    return {
+    sub = {"target": f"ir.actions.server:{action_id}",
+           "xml_id": action_xml_id, "status": action_status}
+    if action_backup:
+        sub["rollback_snapshot"] = str(action_backup.relative_to(paths.instance_root))
+
+    result = {
         "type": "create_automated_action",
         "target": f"base.automation:{auto_id}",
         "xml_id": op["xml_id"],
         "status": auto_status,
-        "sub_records": [
-            {"target": f"ir.actions.server:{action_id}",
-             "xml_id": action_xml_id, "status": action_status},
-        ],
+        "sub_records": [sub],
     }
+    if auto_backup:
+        result["rollback_snapshot"] = str(auto_backup.relative_to(paths.instance_root))
+    return result
 
 
 def verify(ctx, op, *, paths: Paths, changeset_id):
@@ -131,3 +142,28 @@ def verify(ctx, op, *, paths: Paths, changeset_id):
     return {"type": "create_automated_action",
             "target": f"base.automation:{auto_id}",
             "matches": matches}
+
+
+def rollback(ctx, op_record, *, paths: Paths, env_name: str, dry_run: bool = False):
+    """Composite rollback: undo base.automation first (it references the
+    server action), then undo the sibling ir.actions.server. Reverse order
+    from apply() to avoid foreign-key violations on unlink."""
+    results: list[dict] = []
+    # 1. Top-level base.automation
+    auto_result = rollback_upsert(ctx, op_record, paths=paths, dry_run=dry_run)
+    auto_result["record"] = "base.automation"
+    results.append(auto_result)
+    # 2. Sibling action(s)
+    for sub in op_record.get("sub_records") or []:
+        sub_result = rollback_upsert(ctx, sub, paths=paths, dry_run=dry_run)
+        sub_result["record"] = "ir.actions.server"
+        results.append(sub_result)
+    # Roll-up status: if any sub returned manual-required, surface that;
+    # otherwise inherit the top-level status.
+    rollup = "restored" if all(r.get("status") in
+                               ("restored", "unlinked", "skipped",
+                                "would-restore", "would-unlink")
+                               for r in results) else "manual-required"
+    return {"type": "create_automated_action",
+            "target": op_record.get("target"),
+            "status": rollup, "sub_results": results}

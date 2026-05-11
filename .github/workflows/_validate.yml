@@ -1,0 +1,112 @@
+name: _validate (reusable)
+
+# Reusable workflow called by per-instance `validate.yml`. Owns the full
+# validate logic: changeset detection, restricted-folder guard (ai/* only),
+# and per-changeset static validation. Keeping this here means every
+# instance repo behaves identically — caller files are 10-line shims.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install OdooAiDeployer
+        run: pip install "git+https://github.com/dietbald/OdooAiDeployer.git@main"
+
+      - name: Detect changed changesets
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          set -e
+          # --diff-filter=AMR: Added / Modified / Renamed only — never Deleted.
+          # Without this, a revert that removes a changeset triggers a validate
+          # against the now-missing folder.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+            git fetch origin "$BASE_REF"
+            changed=$(git diff --name-only --diff-filter=AMR "$base...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+          else
+            if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
+              if git rev-parse origin/main >/dev/null 2>&1; then
+                changed=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+              else
+                changed=$(ls -1 changesets 2>/dev/null | grep -v '^\.' || true)
+              fi
+            else
+              changed=$(git diff --name-only --diff-filter=AMR "$EVENT_BEFORE...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+            fi
+          fi
+          {
+            echo "changesets<<EOF"
+            echo "$changed"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$changed" ]; then
+            echo "No changesets touched in this push/PR."
+          else
+            echo "Will validate:"
+            echo "$changed"
+          fi
+
+      - name: Restricted-folder guard (ai/* branches and ai/* PRs)
+        if: startsWith(github.ref, 'refs/heads/ai/') || startsWith(github.head_ref, 'ai/')
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -e
+          if [ -n "$BASE_REF" ]; then
+            base="origin/$BASE_REF"
+            git fetch origin "$BASE_REF" --depth=1 2>/dev/null || true
+          else
+            base="origin/main"
+            git fetch origin main --depth=1 2>/dev/null || true
+          fi
+          if ! git rev-parse "$base" >/dev/null 2>&1; then
+            echo "::error::Restricted-folder guard cannot resolve diff base '$base' — refusing to pass guard by default."
+            exit 1
+          fi
+          # Guard rules live at deployer/restricted_paths.py — single source
+          # of truth for every instance repo.
+          odoo-deploy --repo . guard-paths --base "$base"
+
+      - name: Validate each changeset
+        if: steps.detect.outputs.changesets != ''
+        env:
+          CHANGESETS: ${{ steps.detect.outputs.changesets }}
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r cs; do
+            [ -z "$cs" ] && continue
+            echo "::group::validate $cs"
+            odoo-deploy --repo . validate --changeset "$cs" || fail=1
+            echo "::endgroup::"
+          done <<< "$CHANGESETS"
+          exit $fail
+
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-reports
+          path: |
+            reports/validation/
+            reports/ai_feedback/
+          if-no-files-found: ignore
