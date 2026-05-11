@@ -74,10 +74,16 @@ def check_promotion_gate(paths: Paths, env_name: str,
                 f"manifest_sha256={audit.get('manifest_sha256','')[:12]}... but "
                 f"current changeset hashes to {sha[:12]}.... Re-apply on {lower}."
             )
-        if audit.get("status") == "failed_partial":
+        # Only `deployed` is promotable. Every other terminal status means
+        # the lower env is NOT carrying this changeset — promoting from it
+        # would either skip the validation (no proof it ran cleanly anywhere)
+        # or land in a worse half-state on the higher env.
+        lower_status = audit.get("status")
+        if lower_status != "deployed":
             die(
                 f"promotion gate: audits/{lower}/{changeset_id}.json has "
-                f"status=failed_partial. Roll back or fix on {lower} first."
+                f"status={lower_status!r} (not 'deployed'). "
+                f"Fix the changeset and re-apply on {lower} first."
             )
 
 
@@ -222,7 +228,66 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
         print("[dry-run] no writes; registry not updated; no audit file written.")
         return 0
 
-    status = "deployed" if failed_index is None else "failed_partial"
+    # On partial failure: automatically roll back the ops that DID complete,
+    # in reverse order. We never want a partial-state deploy to persist:
+    # downstream gates and the next CI run treat audits as ground truth, so a
+    # `failed_partial` left lying around either blocks future work or — worse
+    # — gets silently re-applied on top of half-mutated state.
+    auto_rollback_results: list[dict] | None = None
+    if failed_index is not None and op_results:
+        print(f"[auto-rollback] op {failed_index} failed — undoing "
+              f"{len(op_results)} previously-completed op(s) in reverse order")
+        auto_rollback_results = []
+        for op_record in reversed(op_results):
+            op_idx = op_record.get("op_index")
+            op_type = op_record.get("type")
+            handler = DISPATCH.get(op_type)
+            if handler is None or not hasattr(handler, "rollback"):
+                msg = f"handler '{op_type}' has no rollback()"
+                print(f"[auto-rollback] op {op_idx} ({op_type}): MANUAL — {msg}")
+                auto_rollback_results.append({
+                    "op_index": op_idx, "type": op_type,
+                    "target": op_record.get("target", "?"),
+                    "status": "manual-required", "reason": msg,
+                })
+                continue
+            try:
+                rb = handler.rollback(ctx, op_record,
+                                      paths=paths, env_name=env_name,
+                                      dry_run=False)
+            except SystemExit:
+                raise
+            except Exception as exc:
+                err = f"{type(exc).__name__}: {exc}"
+                print(f"[auto-rollback] op {op_idx} ({op_type}): ERROR — {err}")
+                auto_rollback_results.append({
+                    "op_index": op_idx, "type": op_type,
+                    "target": op_record.get("target", "?"),
+                    "status": "error", "error": err,
+                })
+                continue
+            rb.setdefault("op_index", op_idx)
+            rb.setdefault("type", op_type)
+            print(f"[auto-rollback] op {op_idx} ({op_type}): {rb.get('status')}")
+            auto_rollback_results.append(rb)
+
+    # Final status:
+    #   deployed                     — all ops applied
+    #   rolled_back_after_failure    — failure + every completed op successfully reversed
+    #   failed_partial               — failure on op 0 (nothing to roll back)
+    #   failed_partial_rollback_incomplete — failure + at least one rollback couldn't run
+    if failed_index is None:
+        status = "deployed"
+    elif not op_results:
+        # Op 0 failed; nothing was actually written before the failure.
+        status = "failed_partial"
+    elif auto_rollback_results and all(
+            r.get("status") in ("restored", "unlinked", "skipped",
+                                "would-restore", "would-unlink")
+            for r in auto_rollback_results):
+        status = "rolled_back_after_failure"
+    else:
+        status = "failed_partial_rollback_incomplete"
 
     audit_payload = {
         "changeset": changeset_id,
@@ -240,14 +305,29 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
         audit_payload["failed_operation"] = failed_index
         audit_payload["error"] = failure_error
         audit_payload["completed_operations"] = list(range(failed_index))
-        audit_payload["recovery_hint"] = (
-            f"Run `odoo-deploy --repo . rollback --env {env_name} --changeset "
-            f"{changeset_id}` to undo ops 0..{failed_index - 1}, OR fix the "
-            f"changeset and re-deploy with --force on dev. Do NOT re-deploy "
-            f"without rolling back: ops 0..{failed_index - 1} would re-snapshot "
-            f"the now-mutated state as the 'before' baseline, losing the true "
-            f"pre-deploy reference."
-        )
+        if auto_rollback_results is not None:
+            audit_payload["auto_rollback"] = auto_rollback_results
+        if status == "rolled_back_after_failure":
+            audit_payload["recovery_hint"] = (
+                f"All {len(op_results)} completed op(s) were automatically "
+                f"reversed; Odoo is back to the pre-deploy state. Fix the "
+                f"changeset and re-deploy with --force on dev."
+            )
+        elif status == "failed_partial_rollback_incomplete":
+            failed_rbs = [r for r in (auto_rollback_results or [])
+                          if r.get("status") in ("manual-required", "error")]
+            audit_payload["recovery_hint"] = (
+                f"Auto-rollback could not complete cleanly — {len(failed_rbs)} "
+                f"op(s) need manual intervention. Inspect `auto_rollback` in "
+                f"this audit, resolve each manual-required/error entry, then "
+                f"re-run rollback or hand-restore. Do NOT re-deploy until the "
+                f"env is back to a known-good state."
+            )
+        else:  # failed_partial (op 0 failed, nothing to undo)
+            audit_payload["recovery_hint"] = (
+                f"Op 0 failed before any write; no rollback needed. Fix the "
+                f"changeset and re-deploy with --force on dev."
+            )
 
     # Order matters: write registry first (in-DB, authoritative for "what's
     # on this DB"), then the audit file (git-tracked, authoritative for
@@ -256,11 +336,12 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
     # is safe (registry/state match → idempotent skip → audit re-written).
     # The reverse order would let the audit lie: claim 'deployed' on disk
     # while the in-DB registry has no record.
-    if failed_index is None:
+    if status == "deployed":
         registry_record(ctx, changeset_id, git_sha, sha)
 
     audit_path = audit_write(paths, env_name, changeset_id, audit_payload)
-    print(f"[audit] wrote {audit_path.relative_to(paths.instance_root)}")
+    print(f"[audit] wrote {audit_path.relative_to(paths.instance_root)} "
+          f"(status={status})")
 
     if commit:
         msg = f"deploy: {env_name}/{changeset_id} ({status})"
@@ -268,7 +349,7 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
         if committed:
             print(f"[git] committed: {msg}")
 
-    if status == "failed_partial":
+    if status != "deployed":
         print(f"[recovery] {audit_payload['recovery_hint']}")
 
     return 0 if status == "deployed" else 2
