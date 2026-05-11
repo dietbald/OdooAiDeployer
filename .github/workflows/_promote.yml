@@ -20,6 +20,13 @@ on:
 permissions:
   contents: write
 
+# Serialize same-env+same-branch promotes. Different envs (staging vs
+# production) can still run in parallel because the group key includes
+# `environment`. See _deploy-dev.yml for the full rationale.
+concurrency:
+  group: promote-${{ inputs.environment }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   promote:
     runs-on: ubuntu-latest

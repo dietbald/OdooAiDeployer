@@ -21,6 +21,12 @@ on:
 permissions:
   contents: write
 
+# Serialize same-env+same-branch rollbacks (e.g. accidental double-click on
+# the workflow_dispatch button). See _deploy-dev.yml for full rationale.
+concurrency:
+  group: rollback-${{ inputs.environment }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   rollback:
     runs-on: ubuntu-latest

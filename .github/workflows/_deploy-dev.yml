@@ -16,6 +16,16 @@ on:
 permissions:
   contents: write
 
+# Serialize same-branch deploys. Without this, two rapid triggers (e.g. a
+# push followed by a workflow_dispatch on the same branch) race at the
+# `git push` of the audit-back commit — one wins, the other fails with
+# `[rejected] (fetch first)`. cancel-in-progress: false because we want
+# both deploys to actually run; if the second one is now a no-op against
+# Odoo (idempotent skip), the audit still records that it ran.
+concurrency:
+  group: deploy-dev-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   deploy-dev:
     runs-on: ubuntu-latest
@@ -23,6 +33,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Always check out the branch TIP, not the SHA that triggered this
+          # run. Otherwise: if a previous deploy-dev pushed an audit commit
+          # while we were queued, our checkout would predate that audit and
+          # our own audit commit would fail to fast-forward at push time.
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 

@@ -10,6 +10,13 @@ on:
 permissions:
   contents: write
 
+# Serialize same-env exports. Baseline always lands on main (not the
+# triggering ref) so the group key isn't per-branch — two concurrent
+# exports of the same env would both try to commit & push to main.
+concurrency:
+  group: export-baseline-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   export-baseline:
     runs-on: ubuntu-latest
