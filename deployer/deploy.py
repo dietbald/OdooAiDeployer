@@ -179,13 +179,26 @@ def cmd_deploy(paths: Paths, env_name: str, changeset_id: str, *,
         print("       Use --force on dev to re-apply, or bump the changeset.")
         return 0
     if existing and existing.get("manifest_sha256") != sha and not force:
+        # in-DB sha mismatch is expected on staging/production when promoting
+        # a newer version — staging's last-applied sha IS the previous version
+        # we're updating from. The legitimacy of the promotion is already
+        # verified by:
+        #   1. check_promotion_gate above: lower-env audit exists with our
+        #      local sha (proof the new version was deployed on dev)
+        #   2. check_env_alignment above: target's actual pre-deploy state
+        #      matches what the lower env's audit recorded as its before-sha
+        #      (proof the env is in the state our test expected)
+        # If both pass, this IS a legitimate promote-newer-version operation,
+        # not drift. Old code died here unconditionally, which made every
+        # legitimate re-promote of an updated changeset fail.
         if env_name == "dev":
             print(f"[note] in-DB sha differs from local — re-applying on dev")
         else:
-            die(
-                f"in-DB registry shows {changeset_id} applied with "
-                f"manifest_sha256={existing.get('manifest_sha256','')[:12]}..., "
-                f"but local content hashes to {sha[:12]}.... Apply on dev first."
+            print(
+                f"[promote] in-DB sha "
+                f"{existing.get('manifest_sha256','')[:12]}... → "
+                f"{sha[:12]}... (file-system gate + env-alignment already "
+                f"verified this promotion is legitimate)"
             )
 
     print(f"[apply] {changeset_id} on {env_name} "
