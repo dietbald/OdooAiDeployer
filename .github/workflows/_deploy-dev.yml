@@ -40,19 +40,25 @@ jobs:
           EVENT_BEFORE: ${{ github.event.before }}
         run: |
           set -e
+          # Detect any modification within a changeset folder (manifest, arch
+          # files, code files, README, anything). Earlier versions only watched
+          # `changesets/*/manifest.yaml`, so edits to arch_file/code_file
+          # silently skipped redeploy — AI thought it had shipped a new version
+          # when the on-disk arch_db on Odoo was still the previous content.
           # --diff-filter=AMR: never deploy a deleted folder.
+          # awk -F/ '{print $2}': extract the changeset id from `changesets/<id>/...`.
           if [ -n "$INPUT_CHANGESET" ]; then
             changed="$INPUT_CHANGESET"
           else
             if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
               git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
               if git rev-parse origin/main >/dev/null 2>&1; then
-                changed=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+                changed=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- 'changesets/' | awk -F/ 'NF>=3 {print $2}' | sort -u || true)
               else
                 changed=$(ls -1 changesets 2>/dev/null | grep -v '^\.' || true)
               fi
             else
-              changed=$(git diff --name-only --diff-filter=AMR "$EVENT_BEFORE...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+              changed=$(git diff --name-only --diff-filter=AMR "$EVENT_BEFORE...HEAD" -- 'changesets/' | awk -F/ 'NF>=3 {print $2}' | sort -u || true)
             fi
           fi
           {

@@ -34,23 +34,27 @@ jobs:
           EVENT_BEFORE: ${{ github.event.before }}
         run: |
           set -e
+          # Detect any modification within a changeset folder (manifest, arch
+          # files, code files, README, anything). Earlier versions only watched
+          # `changesets/*/manifest.yaml` so content-only edits silently skipped
+          # validation, which meant a broken arch_file could ship to deploy-dev
+          # without revalidate first.
           # --diff-filter=AMR: Added / Modified / Renamed only — never Deleted.
-          # Without this, a revert that removes a changeset triggers a validate
-          # against the now-missing folder.
+          # awk -F/ '{print $2}': extract the changeset id from `changesets/<id>/...`.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             base="origin/$BASE_REF"
             git fetch origin "$BASE_REF"
-            changed=$(git diff --name-only --diff-filter=AMR "$base...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+            changed=$(git diff --name-only --diff-filter=AMR "$base...HEAD" -- 'changesets/' | awk -F/ 'NF>=3 {print $2}' | sort -u || true)
           else
             if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
               git fetch origin main:refs/remotes/origin/main 2>/dev/null || true
               if git rev-parse origin/main >/dev/null 2>&1; then
-                changed=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+                changed=$(git diff --name-only --diff-filter=AMR origin/main...HEAD -- 'changesets/' | awk -F/ 'NF>=3 {print $2}' | sort -u || true)
               else
                 changed=$(ls -1 changesets 2>/dev/null | grep -v '^\.' || true)
               fi
             else
-              changed=$(git diff --name-only --diff-filter=AMR "$EVENT_BEFORE...HEAD" -- 'changesets/*/manifest.yaml' | xargs -n1 dirname | xargs -n1 basename | sort -u || true)
+              changed=$(git diff --name-only --diff-filter=AMR "$EVENT_BEFORE...HEAD" -- 'changesets/' | awk -F/ 'NF>=3 {print $2}' | sort -u || true)
             fi
           fi
           {
