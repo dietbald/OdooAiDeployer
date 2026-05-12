@@ -30,6 +30,29 @@ MODEL_WHITELIST = {
     "account.tax",
     "account.account.tag",
     "account.journal",
+    # --- Payroll / HR configuration (added for BICC payroll port) ---
+    # Salary rules and their categories. hr.salary.rule contains Python compute
+    # expressions (amount_python_compute, condition_python); same risk profile
+    # as mail.template's body_html with qweb — accept the same way.
+    "hr.salary.rule",
+    "hr.salary.rule.category",
+    # Payslip input field definitions (LATES, OTPAY, NONTAX_PAY, etc.) —
+    # pure config rows used as keys by salary rules and structures.
+    "hr.payslip.input.type",
+    # Time-bound config values (TRAIN tax brackets, SSS MSC tables, MWE rates).
+    "hr.rule.parameter.value",
+    # Leave type catalog (SIL, OBT, Sick, OT Request) — configuration.
+    "hr.leave.type",
+    # Company / public holidays attached to a resource.calendar.
+    "resource.calendar.leaves",
+    # --- NOT in whitelist on purpose ---
+    # ir.model: creates DB schema; too sensitive for generic create_record.
+    #   Custom models (x_*) should be set up via Odoo UI (Settings → Technical
+    #   → Models) one-time per env, then targeted by name in changesets.
+    # ir.model.access: ACL records. Generic update could let AI grant itself
+    #   any permission. Wave-6 typed handler planned; until then, manual via UI.
+    # hr.leave.allocation: per-employee balances are business data, not config.
+    #   Belongs in data/<changeset_id>/ as a CSV that TJ imports manually.
 }
 
 
