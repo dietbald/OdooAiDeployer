@@ -117,3 +117,42 @@ jobs:
             git commit -m "deploy: ${ENV_NAME}/${CS}"
             git push origin "HEAD:${{ github.ref_name }}"
           fi
+
+      # Once production deploy lands on an ai/* branch, close the loop:
+      # squash-merge the branch into main so main is the canonical record
+      # of what's live in prod, and delete the now-redundant ai/* branch.
+      # Only fires when:
+      #   * environment == production  (we don't auto-merge after staging)
+      #   * triggered from an ai/* branch  (main and dev/* are intentional
+      #     manual workflows, not subject to auto-merge)
+      #   * all prior steps succeeded
+      # Skips cleanly if the branch is already merged or no diff vs main.
+      - name: Auto-merge ai/* → main after successful prod deploy
+        if: inputs.environment == 'production' && success() && startsWith(github.ref_name, 'ai/')
+        env:
+          CS: ${{ inputs.changeset }}
+          BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          git fetch origin main --depth=1 2>/dev/null || true
+          if git merge-base --is-ancestor HEAD origin/main; then
+            echo "Branch is already an ancestor of main — nothing to merge."
+            exit 0
+          fi
+          # If a PR is already open for this branch, reuse it; else open one.
+          pr_num=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+                   --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -z "$pr_num" ]; then
+            pr_url=$(gh pr create --repo "$REPO" \
+              --base main --head "$BRANCH" \
+              --title "${CS}: shipped to production" \
+              --body "Auto-opened by promote-prod after successful deploy. Branch carries audits for dev / staging / production. Squash-merging so main remains the canonical record of what's live.")
+            pr_num=$(echo "$pr_url" | grep -oE '[0-9]+$')
+            echo "Opened PR #${pr_num}"
+          else
+            echo "PR #${pr_num} already open, will merge it"
+          fi
+          gh pr merge "$pr_num" --repo "$REPO" --squash --delete-branch
+          echo "Squash-merged PR #${pr_num} → main and deleted ${BRANCH}"
