@@ -75,12 +75,17 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -e
+          # IMPORTANT: full-history fetch (no --depth=1). The guard's bot-skip
+          # logic uses `git log base..HEAD` to enumerate AI-authored commits;
+          # a shallow main makes that range over-inclusive (it returns commits
+          # that are actually on main but missing from the shallow view) and
+          # produces false-positive guard violations.
           if [ -n "$BASE_REF" ]; then
             base="origin/$BASE_REF"
-            git fetch origin "$BASE_REF" --depth=1 2>/dev/null || true
+            git fetch origin "$BASE_REF" 2>/dev/null || true
           else
             base="origin/main"
-            git fetch origin main --depth=1 2>/dev/null || true
+            git fetch origin main 2>/dev/null || true
           fi
           if ! git rev-parse "$base" >/dev/null 2>&1; then
             echo "::error::Restricted-folder guard cannot resolve diff base '$base' — refusing to pass guard by default."
